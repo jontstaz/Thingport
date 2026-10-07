@@ -1,7 +1,7 @@
 # Thingport Grab
 
-A browser extension for Chrome, Edge and Firefox that imports MakerWorld, Thingiverse, and
-Printables models into your self-hosted Thingport instance without leaving the provider's site.
+A browser extension for Chrome, Edge and Firefox that imports MakerWorld, Thingiverse, Printables,
+and Cults3D models into your self-hosted Thingport instance without leaving the provider's site.
 Visiting a model, collection, or Thingiverse Likes page shows a floating Thingport icon; clicking it
 opens a small panel to pick what to import (and, for a single model, an optional destination
 collection), then imports it the same way Thingport's own "+ Add > Import" does.
@@ -164,10 +164,10 @@ from the extension.
 
 ## What counts as "importable"
 
-- A single model page (MakerWorld, a Thingiverse Thing, a Printables Model) -- hidden automatically
-  once you've already imported that exact page.
-- A MakerWorld collection, a Thingiverse Collection or Likes page, or a Printables collection --
-  lets you import the listed designs in one go.
+- A single model page (MakerWorld, a Thingiverse Thing, a Printables Model, a Cults3D model) --
+  hidden automatically once you've already imported that exact page.
+- A MakerWorld collection, a Thingiverse Collection or Likes page, a Printables collection, or a
+  Cults3D creator's creations page -- lets you import the listed designs in one go.
 
 Picking a destination collection is only offered for a single-model import; a batch import instead
 lands in Thingport's own auto-named collection for that batch (e.g. "Thingiverse Likes"), matching

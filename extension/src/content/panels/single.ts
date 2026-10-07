@@ -1,5 +1,5 @@
-// Thingiverse and Printables import directly; other links go through /import/inspect first, like
-// the web app's useUploadImport.tsx.
+// Thingiverse, Printables, and Cults3D import directly; other links go through /import/inspect
+// first, like the web app's useUploadImport.tsx.
 
 import type { FillGapsResult, InspectResult, SourceGap, ZipEntriesResult } from "../../shared/api";
 import { request } from "../../shared/messages";
@@ -108,7 +108,9 @@ export async function loadSingleItem(): Promise<void> {
   const { provider, type } = ctx().classification;
   renderFunStatus(checkingLinkPhrases(provider));
   const skipInspect =
-    (provider === "thingiverse" && type === "thing") || (provider === "printables" && type === "model");
+    (provider === "thingiverse" && type === "thing") ||
+    (provider === "printables" && type === "model") ||
+    (provider === "cults3d" && type === "model");
 
   let zipFilename: string | null = null;
   if (skipInspect) {

@@ -8,7 +8,12 @@ export function isTarget(value: string): value is Target {
   return (TARGETS as readonly string[]).includes(value);
 }
 
-const PROVIDER_MATCHES = ["*://*.thingiverse.com/*", "*://*.makerworld.com/*", "*://*.printables.com/*"];
+const PROVIDER_MATCHES = [
+  "*://*.thingiverse.com/*",
+  "*://*.makerworld.com/*",
+  "*://*.printables.com/*",
+  "*://*.cults3d.com/*",
+];
 
 function iconSet(variant: "color" | "dark"): Record<string, string> {
   return Object.fromEntries(

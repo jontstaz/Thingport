@@ -1,5 +1,5 @@
-// Batch flow for Thingiverse Likes/Collections and Printables Collections. MakerWorld collections
-// use the guided flow in makerworldCollection.ts.
+// Batch flow for Thingiverse Likes/Collections, Printables Collections, and Cults3D creator
+// creations. MakerWorld collections use the guided flow in makerworldCollection.ts.
 
 import type { BatchEntriesResult, ImportJob } from "../../shared/api";
 import { ctx } from "../context";
@@ -8,7 +8,7 @@ import { isPanelMounted, onPanelAction, panelQueryAll, renderPanel } from "../sh
 import { errorHtml, statusHtml, successHtml } from "./results";
 import { loadingModelsPhrases, renderFunStatus } from "./funStatus";
 
-type BatchKey = "thingiverse:likes" | "thingiverse:collection" | "printables:collection";
+type BatchKey = "thingiverse:likes" | "thingiverse:collection" | "printables:collection" | "cults3d:creations";
 
 const BATCH_ENDPOINTS: Record<BatchKey, { entries: string; start: string; idField: string }> = {
   "thingiverse:likes": {
@@ -24,6 +24,11 @@ const BATCH_ENDPOINTS: Record<BatchKey, { entries: string; start: string; idFiel
   "printables:collection": {
     entries: "/import/printables-collection/entries",
     start: "/import/printables-collection",
+    idField: "model_ids",
+  },
+  "cults3d:creations": {
+    entries: "/import/cults3d-creations/entries",
+    start: "/import/cults3d-creations",
     idField: "model_ids",
   },
 };
