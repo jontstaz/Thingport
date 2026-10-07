@@ -8,6 +8,7 @@ export const IMPORT_PROVIDER_INFO: Record<string, ImportProviderInfo> = {
   makerworld: { label: "MakerWorld", color: "#00B800" },
   thingiverse: { label: "Thingiverse", color: "#2B78FE" },
   printables: { label: "Printables", color: "#FA6831" },
+  cults3d: { label: "Cults3D", color: "#B24BF3" },
   // Direct uploads (source_provider is null). Monochrome so it doesn't compete with provider badges;
   // dark mode uses flat white for contrast against the chip.
   thingport: {

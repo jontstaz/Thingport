@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db";
+import { HttpError } from "../utils/fileUtils";
 
 async function getBoolSetting(key: string, fallback: boolean): Promise<boolean> {
   const row = await prisma.setting.findUnique({ where: { key } });
@@ -104,6 +105,84 @@ export async function setThingiverseAccessToken(value: string | null): Promise<v
     create: { key: THINGIVERSE_ACCESS_TOKEN_KEY, value: trimmed },
     update: { value: trimmed },
   });
+}
+
+const CULTS3D_API_KEY_SETTING_KEY = "cults3d_api_key";
+const CULTS3D_API_USER_SETTING_KEY = "cults3d_api_user";
+
+export type Cults3dCredentials = { apiKey: string | null; apiUser: string | null };
+
+/** Instance-wide: the key/user pair belongs to whichever Cults3D account generated it. */
+export async function getCults3dCredentials(): Promise<Cults3dCredentials> {
+  const rows = await prisma.setting.findMany({
+    where: { key: { in: [CULTS3D_API_KEY_SETTING_KEY, CULTS3D_API_USER_SETTING_KEY] } },
+  });
+  const value = (key: string): string | null => {
+    const row = rows.find((r) => r.key === key);
+    return typeof row?.value === "string" && row.value.trim() ? row.value.trim() : null;
+  };
+  return { apiKey: value(CULTS3D_API_KEY_SETTING_KEY), apiUser: value(CULTS3D_API_USER_SETTING_KEY) };
+}
+
+export async function getCults3dApiKey(): Promise<string | null> {
+  return (await getCults3dCredentials()).apiKey;
+}
+
+export async function getCults3dApiUser(): Promise<string | null> {
+  return (await getCults3dCredentials()).apiUser;
+}
+
+/** Both values must be set (or cleared) together -- the API checks the pair. */
+export async function setCults3dCredentials(apiKey: string | null, apiUser: string | null): Promise<void> {
+  const trimmedKey = (apiKey ?? "").trim();
+  const trimmedUser = (apiUser ?? "").trim();
+  if (trimmedKey !== "" && trimmedUser === "") {
+    throw new HttpError(400, "Both the Cults3D API key and API user are required together.");
+  }
+  if (trimmedKey === "" || trimmedUser === "") {
+    await prisma.setting.deleteMany({
+      where: { key: { in: [CULTS3D_API_KEY_SETTING_KEY, CULTS3D_API_USER_SETTING_KEY] } },
+    });
+    return;
+  }
+  await Promise.all(
+    [CULTS3D_API_KEY_SETTING_KEY, CULTS3D_API_USER_SETTING_KEY].map((key, i) =>
+      prisma.setting.upsert({
+ where: { key },
+        create: { key, value: i === 0 ? trimmedKey : trimmedUser },
+        update: { value: i === 0 ? trimmedKey : trimmedUser },
+      }),
+    ),
+  );
+}
+
+/** Cheap liveness check for the settings form: a trivial query against the live API. */
+export async function verifyCults3dCredentials(apiKey: string, apiUser: string): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    let res: Response;
+    try {
+      res = await fetch("https://api.cults3d.com/graphql", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Authorization: `Bearer ${apiKey}`,
+          "X-Api-User": apiUser,
+        },
+        body: JSON.stringify({ query: "{ __typename }" }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (res.status === 401 || res.status === 403 || res.status === 429) return false;
+    if (!res.ok) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export type SmtpSettings = {

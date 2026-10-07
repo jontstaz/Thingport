@@ -887,6 +887,16 @@
       "printables": {
         "alwaysConnected": "Printables is connected by default: it needs no account or key."
       },
+      "cults3d": {
+        "placeholder": "Paste the API key",
+        "userPlaceholder": "API user (your Cults3D username)",
+        "steps": [
+          "Sign in at cults3d.com and open cults3d.com/en/developers.",
+          "Generate an API key and copy it together with your API user name.",
+          "Paste both below."
+        ],
+        "adminOnly": "Only an admin of this Thingport can set this up."
+      },
       "comingSoon": "Coming soon"
     },
     "slicer": {

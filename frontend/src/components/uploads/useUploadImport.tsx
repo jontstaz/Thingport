@@ -24,6 +24,8 @@ import {
   isMakerworldCollectionUrl,
   isPrintablesCollectionUrl,
   isPrintablesModelUrl,
+  isCults3dCreationsUrl,
+  isCults3dModelUrl,
   isThingiverseCollectionUrl,
   isThingiverseLikesUrl,
   isThingiverseThingUrl,
@@ -58,6 +60,7 @@ export function useUploadImport({ onUploaded, categoryId, makerworldCookie, onUn
     startThingiverseLikesImport,
     startThingiverseCollectionImport,
     startPrintablesCollectionImport,
+    startCults3dCreationsImport,
     startMakerworldProfilesImport,
     startLinksImport,
   } = useImportJob();
@@ -340,7 +343,34 @@ export function useUploadImport({ onUploaded, categoryId, makerworldCookie, onUn
         return;
       }
 
-      if (isThingiverseThingUrl(url) || isPrintablesModelUrl(url)) {
+      if (isCults3dCreationsUrl(url)) {
+        setImporting(false);
+        await collectionPrompt.prompt({
+          label: url,
+          loadEntries: async () => {
+            try {
+              return await importsApi.listCults3dCreationsEntries(payload);
+            } catch (err) {
+              if (err instanceof UnauthorizedError) onUnauthorized?.();
+              throw err;
+            }
+          },
+          onImportSelected: async (modelIds: string[]) => {
+            try {
+              await startCults3dCreationsImport({ ...payload, model_ids: modelIds });
+            } catch (err) {
+              if (err instanceof UnauthorizedError) {
+                onUnauthorized?.();
+                return;
+              }
+              throw err;
+            }
+          },
+        });
+        return;
+      }
+
+      if (isThingiverseThingUrl(url) || isPrintablesModelUrl(url) || isCults3dModelUrl(url)) {
         // The backend splits these into plates itself.
         const imported = await importsApi.fromLink(payload);
         showImportedToast(imported);

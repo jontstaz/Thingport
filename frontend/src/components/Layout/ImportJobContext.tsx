@@ -9,6 +9,7 @@ type StartZipImportPayload = Parameters<typeof importsApi.zipFromLink>[0];
 type StartThingiverseLikesImportPayload = Parameters<typeof importsApi.fromThingiverseLikes>[0];
 type StartThingiverseCollectionImportPayload = Parameters<typeof importsApi.fromThingiverseCollection>[0];
 type StartPrintablesCollectionImportPayload = Parameters<typeof importsApi.fromPrintablesCollection>[0];
+type StartCults3dCreationsImportPayload = Parameters<typeof importsApi.fromCults3dCreations>[0];
 type StartMakerworldProfilesImportPayload = Parameters<typeof importsApi.fromMakerworldProfiles>[0];
 type StartLinksImportPayload = Parameters<typeof importsApi.fromLinks>[0];
 
@@ -21,6 +22,7 @@ type ImportJobContextValue = {
   startThingiverseLikesImport: (payload: StartThingiverseLikesImportPayload) => Promise<void>;
   startThingiverseCollectionImport: (payload: StartThingiverseCollectionImportPayload) => Promise<void>;
   startPrintablesCollectionImport: (payload: StartPrintablesCollectionImportPayload) => Promise<void>;
+  startCults3dCreationsImport: (payload: StartCults3dCreationsImportPayload) => Promise<void>;
   startMakerworldProfilesImport: (payload: StartMakerworldProfilesImportPayload) => Promise<void>;
   startLinksImport: (payload: StartLinksImportPayload) => Promise<void>;
   /** Reruns the links that failed on the finished job shown in the progress bar. */
@@ -169,6 +171,16 @@ export function ImportJobProvider({
     [startPolling],
   );
 
+  const startCults3dCreationsImport = useCallback(
+    async (payload: StartCults3dCreationsImportPayload) => {
+      const { job_id } = await importsApi.fromCults3dCreations(payload);
+      const job = await importsApi.getImportJob(job_id);
+      setActiveJob(job);
+      startPolling(job_id);
+    },
+    [startPolling],
+  );
+
   const startMakerworldProfilesImport = useCallback(
     async (payload: StartMakerworldProfilesImportPayload) => {
       const { job_id } = await importsApi.fromMakerworldProfiles(payload);
@@ -211,6 +223,7 @@ export function ImportJobProvider({
       startThingiverseLikesImport,
       startThingiverseCollectionImport,
       startPrintablesCollectionImport,
+      startCults3dCreationsImport,
       startMakerworldProfilesImport,
       startLinksImport,
       retryJob,
@@ -223,6 +236,7 @@ export function ImportJobProvider({
       startThingiverseLikesImport,
       startThingiverseCollectionImport,
       startPrintablesCollectionImport,
+      startCults3dCreationsImport,
       startMakerworldProfilesImport,
       startLinksImport,
       retryJob,

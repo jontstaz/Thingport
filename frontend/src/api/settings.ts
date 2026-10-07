@@ -193,6 +193,28 @@ export const settingsApi = {
     return res.json();
   },
 
+  getCults3d: async (): Promise<{ configured: boolean }> => {
+    const res = await fetch(`${apiBase()}/settings/cults3d`, { headers: authHeaders() });
+    assertOk(res, "Failed to load Cults3D settings");
+    return res.json();
+  },
+
+  updateCults3d: async (
+    apiKey: string | null,
+    apiUser: string | null,
+  ): Promise<{ configured: boolean }> => {
+    const res = await fetch(`${apiBase()}/settings/cults3d`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ api_key: apiKey, api_user: apiUser }),
+    });
+    if (res.status === 401) throw new UnauthorizedError();
+    if (!res.ok) {
+      throw new Error(await readErrorMessage(res, "Failed to update Cults3D settings"));
+    }
+    return res.json();
+  },
+
   getAuth: async (): Promise<AuthSettings> => {
     const res = await fetch(`${apiBase()}/settings/auth`, { headers: authHeaders() });
     assertOk(res, "Failed to load session settings");

@@ -62,6 +62,12 @@ import {
   resolvePrintablesModel,
   type PrintablesPlateFile,
 } from "./printablesApi";
+import {
+  Cults3dAuthError,
+  Cults3dRateLimitError,
+  parseCults3dModelUrl,
+  resolveCults3dModel,
+} from "./cults3dApi";
 import { getThingiverseAccessToken } from "./settingsService";
 import { upsertAuthorFromImport } from "./authorService";
 import {
@@ -560,6 +566,8 @@ export function identifySourceModel(url: string): { provider: string; externalId
   if (thingiverse) return { provider: "thingiverse", externalId: thingiverse.thingId };
   const printables = parsePrintablesModelUrl(url);
   if (printables) return { provider: "printables", externalId: printables.modelId };
+  const cults3d = parseCults3dModelUrl(url);
+  if (cults3d) return { provider: "cults3d", externalId: cults3d.modelId };
   return null;
 }
 
@@ -603,6 +611,7 @@ export function buildImportSourceUrl(provider: string | null, externalId: string
   if (provider === "makerworld") return `https://makerworld.com/en/models/${externalId}`;
   if (provider === "thingiverse") return `https://www.thingiverse.com/thing:${externalId}`;
   if (provider === "printables") return `https://www.printables.com/model/${externalId}`;
+  if (provider === "cults3d") return `https://cults3d.com/en/3d-model/${externalId}`;
   return null;
 }
 
@@ -934,6 +943,98 @@ async function importPrintablesModel(
   }
 }
 
+async function importCults3dModel(
+  userId: string,
+  source: { provider: string; externalId: string },
+  body: ImportRequestBody,
+): Promise<{
+  print: Print;
+  plates: Plate[];
+  author: Author | null;
+  previewImages: PreviewImage[];
+  alreadyImported: boolean;
+}> {
+  let resolved;
+  try {
+    resolved = await resolveCults3dModel(source.externalId);
+  } catch (err) {
+    if (err instanceof Cults3dAuthError) throw new HttpError(400, err.message);
+    if (err instanceof Cults3dRateLimitError) throw new HttpError(429, err.message);
+    throw err;
+  }
+  if (!resolved) {
+    throw new HttpError(404, "This Cults3D model could not be found, or isn't public.");
+  }
+  const { meta, downloadUrls, galleryImages } = resolved;
+
+  // Cults3D serves paid and free files behind the same API; only files the API user can download
+  // carry a URL, everything else is skipped. Filter to importable model extensions like the
+  // other providers.
+  const modelFiles = downloadUrls.filter((f) => {
+    const ext = path.extname(f.name).toLowerCase();
+    return ext === "" || IMPORT_ALLOWED_EXTS.has(ext);
+  });
+  if (!modelFiles.length) {
+    throw new HttpError(
+      400,
+      "This Cults3D model has no downloadable model files (paid files the API account hasn't purchased, or non-model formats).",
+    );
+  }
+
+  const downloadResults = await Promise.all(
+    modelFiles.map((file) => downloadPlainFileToTemp(file.url, file.name)),
+  );
+  const downloaded = downloadResults
+    .filter((result): result is { input: NewPlateInput } => result !== null && "input" in result)
+    .map((result) => result.input);
+  if (!downloaded.length) {
+    throw new HttpError(400, "None of this model's files could be downloaded.");
+  }
+
+  const author = await upsertAuthorFromImport(meta.author ?? null);
+  const categoryId =
+    body.category_id ??
+    (await resolveCategoryIdByCategory(userId, meta.categorySite ?? null, meta.siteCategoryIds ?? []));
+  const printMeta: PrintMetaInput = {
+    title: body.title ?? meta.title ?? null,
+    notes: body.notes ?? meta.description ?? null,
+    tags: body.tags && body.tags.length ? body.tags : (meta.tags ?? []),
+    categoryId,
+    creator: meta.creator ?? null,
+    authorId: author?.id ?? null,
+    sourceProvider: source.provider,
+    sourceExternalId: source.externalId,
+  };
+
+  try {
+    let result: { print: Print; plates: Plate[] };
+    try {
+      result = await createPrint(userId, printMeta, meta.title || `cults3d-${source.externalId}`, downloaded);
+    } catch (err) {
+      // Race guard: a concurrent import of the same source model won.
+      if (isUniqueConstraintError(err)) {
+        const existing = await findExistingImportedPrint(userId, source);
+        if (existing) return { ...existing, alreadyImported: true };
+      }
+      throw err;
+    }
+    const gallery = galleryImages.map((img) => ({ url: img.url, filename: img.filename }));
+    await attachImportedPreviewImages(result.print.id, result.plates[0]?.id, meta.previewImageUrl ?? null, gallery);
+    await localizeDescriptionImages(result.print.id);
+    const previewImages = await prisma.previewImage.findMany({
+      where: { printId: result.print.id },
+      orderBy: { position: "asc" },
+    });
+    return { ...result, author, previewImages, alreadyImported: false };
+  } finally {
+    for (const input of downloaded) {
+      if (input.tempFilePath && fsSync.existsSync(input.tempFilePath)) {
+        await fs.rm(input.tempFilePath, { force: true }).catch(() => undefined);
+      }
+    }
+  }
+}
+
 type ImportResult = {
   print: Print;
   plates: Plate[];
@@ -967,6 +1068,9 @@ async function importNewOrExisting(userId: string, url: string, body: ImportRequ
   }
   if (source?.provider === "printables") {
     return importPrintablesModel(userId, source, body);
+  }
+  if (source?.provider === "cults3d") {
+    return importCults3dModel(userId, source, body);
   }
 
   const { tempPath, filename, mime, meta } = await downloadImportToTemp(url, body);

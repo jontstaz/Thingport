@@ -33,6 +33,11 @@ import {
 import { getUserMakerworldCookie, setUserMakerworldCookie } from "../services/makerworldCookieService";
 import { type MakerworldCookieCheck, verifyMakerworldCookie } from "../services/makerworldCloudApi";
 import { verifyThingiverseAccessToken } from "../services/thingiverseApi";
+import {
+  getCults3dCredentials,
+  setCults3dCredentials,
+  verifyCults3dCredentials,
+} from "../services/settingsService";
 import { SLICER_IDS, getUserSlicer, setUserSlicer } from "../services/slicerPreferenceService";
 import { CATEGORIES_VIEWS, getCategoriesView, setCategoriesView } from "../services/categoriesViewService";
 import { DASHBOARD_WIDGETS, getDashboardWidgets, setDashboardWidgets } from "../services/dashboardWidgetsService";
@@ -226,6 +231,37 @@ router.post(
     }
     await setThingiverseAccessToken(body.access_token);
     res.json({ configured: Boolean(trimmed) });
+  }),
+);
+
+// Readable by every user so the UI can tell whether imports will work. GET never echoes the
+// credentials, only whether both halves of the pair are set.
+router.get(
+  "/settings/cults3d",
+  asyncHandler(async (_req, res) => {
+    const creds = await getCults3dCredentials();
+    res.json({ configured: Boolean(creds.apiKey && creds.apiUser) });
+  }),
+);
+
+const cults3dSettingsSchema = z.object({ api_key: z.string().nullable(), api_user: z.string().nullable() });
+router.post(
+  "/settings/cults3d",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const body = parseBody(cults3dSettingsSchema, req.body);
+    const apiKey = (body.api_key ?? "").trim();
+    const apiUser = (body.api_user ?? "").trim();
+    if (apiKey || apiUser) {
+      if (!(await verifyCults3dCredentials(apiKey, apiUser))) {
+        throw new HttpError(
+          422,
+          "Couldn't verify this Cults3D API key/user pair -- it may be invalid, revoked, or Cults3D is rate-limiting this instance right now. Double-check it at cults3d.com/en/developers and try again.",
+        );
+      }
+    }
+    await setCults3dCredentials(body.api_key, body.api_user);
+    res.json({ configured: Boolean(apiKey && apiUser) });
   }),
 );
 

@@ -17,6 +17,7 @@ export function detectImportProvider(url: string): ImportProviderKey | null {
   if (host.endsWith("makerworld.com")) return "makerworld";
   if (host === "thingiverse.com" || host === "www.thingiverse.com") return "thingiverse";
   if (host === "printables.com" || host === "www.printables.com") return "printables";
+  if (host === "cults3d.com" || host === "www.cults3d.com") return "cults3d";
   return null;
 }
 
@@ -78,6 +79,22 @@ export function isPrintablesModelUrl(url: string): boolean {
   return /\/model\/\d+/i.test(parsed.pathname);
 }
 
+export function isCults3dModelUrl(url: string): boolean {
+  const parsed = parseUrl(url);
+  if (!parsed) return false;
+  const host = parsed.hostname.toLowerCase();
+  if (host !== "cults3d.com" && host !== "www.cults3d.com") return false;
+  return /\/(?:[a-z]{2}(?:-[a-z]{2})?)\/3d-model\/\d+/i.test(parsed.pathname);
+}
+
+export function isCults3dCreationsUrl(url: string): boolean {
+  const parsed = parseUrl(url);
+  if (!parsed) return false;
+  const host = parsed.hostname.toLowerCase();
+  if (host !== "cults3d.com" && host !== "www.cults3d.com") return false;
+  return /\/users\/[^/]+\/creations/i.test(parsed.pathname) || /\/creators\/[^/]+/i.test(parsed.pathname);
+}
+
 export const IMPORT_LINK_EXAMPLES: Record<ImportProviderKey, { model: string; collection: string }> = {
   makerworld: {
     model: "https://makerworld.com/en/models/123456-example-model",
@@ -90,5 +107,9 @@ export const IMPORT_LINK_EXAMPLES: Record<ImportProviderKey, { model: string; co
   printables: {
     model: "https://www.printables.com/model/123456-example-model",
     collection: "https://www.printables.com/@username/collections/12345-example-collection",
+  },
+  cults3d: {
+    model: "https://cults3d.com/en/3d-model/123456/example-model",
+    collection: "https://cults3d.com/en/users/username/creations",
   },
 };

@@ -5,6 +5,9 @@
 !.env.sample
 !.env.template
 
+# zvec-grep
+.zvec-grep/*
+
 # Node and Vite
 node_modules/
 dist/

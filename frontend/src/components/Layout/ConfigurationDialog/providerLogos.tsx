@@ -1,6 +1,6 @@
 // Glyphs from Simple Icons (CC0). MakerWorld has none of its own there, so it takes Bambu Lab's,
 // whose site it is.
-export type ProviderId = "makerworld" | "thingiverse" | "printables" | "thangs";
+export type ProviderId = "makerworld" | "thingiverse" | "printables" | "cults3d" | "thangs";
 
 const LOGOS: Record<ProviderId, { path: string; color: string }> = {
   makerworld: {
@@ -18,6 +18,11 @@ const LOGOS: Record<ProviderId, { path: string; color: string }> = {
   printables: {
     color: "#FA6831",
     path: "M3.678 4.8 12 9.6v9.6l8.322-4.8V4.8L12 0ZM12 19.2l-8.322-4.8V24Z",
+  },
+  // Stylized "C3" mark; the site has no Simple Icons glyph.
+  cults3d: {
+    color: "#B24BF3",
+    path: "M12 2a10 10 0 1 0 0 20v-3.2A6.8 6.8 0 1 1 12 5.2V2Zm0 5.6a4.4 4.4 0 1 0 0 8.8v-2.6a1.8 1.8 0 1 1 0-3.6V7.6Z",
   },
 };
 

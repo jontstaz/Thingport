@@ -39,6 +39,7 @@ type ZipImportJobBody = ImportRequestBody & { entries: string[] };
 type ThingiverseLikesImportJobBody = ImportRequestBody & { thing_ids: string[]; username: string };
 type ThingiverseCollectionImportJobBody = ImportRequestBody & { thing_ids: string[]; collectionId: string };
 type PrintablesCollectionImportJobBody = ImportRequestBody & { model_ids: string[]; collectionId: string };
+type Cults3dCreationsImportJobBody = ImportRequestBody & { model_ids: string[]; username: string };
 type MakerworldProfilesImportJobBody = ImportRequestBody & { scope: Exclude<MakerworldProfileScope, "url"> };
 
 // Why a design failed, so a batch reads as one clear cause instead of "N failed". Once a CAPTCHA
@@ -541,6 +542,99 @@ export async function runPrintablesCollectionImportJob(
     if (otherFailed) bodyParts.push(`${otherFailed} failed`);
     await createNotification(userId, {
       title: `Imported ${imported} of ${body.model_ids.length} models from Printables`,
+      body: bodyParts.length ? `From "${collectionTitle}" — ${bodyParts.join(", ")}.` : `From "${collectionTitle}".`,
+      externalUrl: body.url,
+      internalPath: resultCollectionId ? `/models/collections/${resultCollectionId}` : null,
+    });
+  } catch (err) {
+    await markJobFailed(jobId, err);
+  }
+}
+
+export async function runCults3dCreationsImportJob(
+  jobId: string,
+  userId: string,
+  body: Cults3dCreationsImportJobBody,
+): Promise<void> {
+  try {
+    let imported = 0;
+    let alreadyInLibrary = 0;
+    let processed = 0;
+    let unavailable = 0;
+    let rateLimited = 0;
+    let authFailed = 0;
+    const failed: string[] = [];
+    const successPrintIds: string[] = [];
+
+    await mapWithConcurrency(body.model_ids, COLLECTION_IMPORT_CONCURRENCY, async (modelId, index) => {
+      const modelUrl = `https://cults3d.com/en/3d-model/${modelId}`;
+      const itemBody: ImportRequestBody = {
+        url: modelUrl,
+        notes: body.notes ?? null,
+        tags: body.tags ?? [],
+        category_id: body.category_id ?? null,
+      };
+      try {
+        const { print, alreadyImported } = await importPrintFromUrl(userId, modelUrl, itemBody);
+        successPrintIds.push(print.id);
+        if (alreadyImported) alreadyInLibrary++;
+        else imported++;
+      } catch (err) {
+        failed.push(modelId);
+        const reason = classifyImportFailure(err);
+        if (reason === "unavailable") unavailable++;
+        else if (reason === "rateLimited") rateLimited++;
+        else if (err instanceof HttpError && err.status === 400 && /Cults3D API credentials/.test(err.message))
+          authFailed++;
+      } finally {
+        processed++;
+        await updateJob(jobId, { processed, imported, alreadyInLibrary, failedCount: failed.length }).catch(
+          () => undefined,
+        );
+      }
+      if (index < body.model_ids.length - 1) await sleep(IMPORT_COLLECTION_DELAY_MS);
+    });
+
+    let resultCollectionId: string | null = null;
+    const collectionTitle = `${body.username}'s creations`;
+    if (successPrintIds.length) {
+      const collection = await findOrCreateCollectionByName(userId, collectionTitle);
+      await addPrintsToCollection(collection.id, successPrintIds);
+      resultCollectionId = collection.id;
+    }
+
+    await updateJob(jobId, {
+      status: "DONE",
+      sourceLabel: collectionTitle,
+      resultCollectionId,
+      resultPrintId: successPrintIds.length === 1 ? successPrintIds[0] : null,
+      processed,
+      imported,
+      alreadyInLibrary,
+      failedCount: failed.length,
+    });
+    void createLog({
+      userId,
+      action: "import_completed",
+      targetId: resultCollectionId,
+      details: {
+        provider: "cults3d",
+        sourceLabel: collectionTitle,
+        imported,
+        alreadyInLibrary,
+        failed: failed.length,
+      },
+    });
+
+    const bodyParts: string[] = [];
+    if (alreadyInLibrary) bodyParts.push(`${alreadyInLibrary} already in your library`);
+    const otherFailed = failed.length - unavailable - rateLimited - authFailed;
+    if (unavailable) bodyParts.push(`${unavailable} unavailable (deleted or not public)`);
+    if (rateLimited) bodyParts.push(`${rateLimited} rate-limited by Cults3D — wait a bit, then retry`);
+    if (authFailed) bodyParts.push(`${authFailed} need re-purchased/paid files the API account can't download`);
+    if (otherFailed) bodyParts.push(`${otherFailed} failed`);
+    await createNotification(userId, {
+      title: `Imported ${imported} of ${body.model_ids.length} models from Cults3D`,
       body: bodyParts.length ? `From "${collectionTitle}" — ${bodyParts.join(", ")}.` : `From "${collectionTitle}".`,
       externalUrl: body.url,
       internalPath: resultCollectionId ? `/models/collections/${resultCollectionId}` : null,

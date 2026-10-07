@@ -36,6 +36,10 @@ import {
   parseThingiverseLikesUrl,
 } from "../services/thingiverseApi";
 import { fetchPrintablesCollectionEntries, parsePrintablesCollectionUrl } from "../services/printablesApi";
+import {
+  fetchCults3dUserCreations,
+  parseCults3dUserCreationsUrl,
+} from "../services/cults3dApi";
 import { getThingiverseAccessToken } from "../services/settingsService";
 import { getUserMakerworldCookie } from "../services/makerworldCookieService";
 import { listZipEntries } from "../services/zipService";
@@ -47,6 +51,7 @@ import {
   runLinksImportJob,
   runMakerworldProfilesImportJob,
   runPrintablesCollectionImportJob,
+  runCults3dCreationsImportJob,
   runThingiverseCollectionImportJob,
   runThingiverseLikesImportJob,
   runZipImportJob,
@@ -411,6 +416,57 @@ router.post(
       total: body.model_ids.length,
     });
     void runPrintablesCollectionImportJob(job.id, req.userId!, { ...body, url, collectionId: parsed.collectionId });
+    res.status(202).json({ job_id: job.id });
+  }),
+);
+
+const cults3dCreationsImportRequestSchema = importRequestSchema.extend({ model_ids: z.array(z.string()).min(1) });
+
+router.post(
+  "/import/cults3d-creations/entries",
+  asyncHandler(async (req, res) => {
+    const body = parseBody(importRequestSchema, req.body);
+    const url = await normalizeImportUrl(body.url);
+    const parsed = parseCults3dUserCreationsUrl(url);
+    if (!parsed) throw new HttpError(400, "Not a Cults3D creator creations URL");
+
+    const listing = await fetchCults3dUserCreations(parsed.username);
+    if (!listing || !listing.entries.length) throw new HttpError(400, "Could not load this creator's models");
+
+    const alreadyImported = await findImportedExternalIds(
+      req.userId!,
+      "cults3d",
+      listing.entries.map((e) => e.modelId),
+    );
+    res.json({
+      title: listing.title,
+      total: listing.total,
+      truncated: listing.truncated,
+      entries: listing.entries.map((e) => ({
+        design_id: e.modelId,
+        title: e.title,
+        cover: e.cover,
+        already_imported: alreadyImported.has(e.modelId),
+      })),
+    });
+  }),
+);
+
+router.post(
+  "/import/cults3d-creations",
+  requireCaptcha("import"),
+  asyncHandler(async (req, res) => {
+    const body = parseBody(cults3dCreationsImportRequestSchema, req.body);
+    await assertNoActiveJob(req.userId!);
+    const url = await normalizeImportUrl(body.url);
+    const parsed = parseCults3dUserCreationsUrl(url);
+    if (!parsed) throw new HttpError(400, "Not a Cults3D creator creations URL");
+    const job = await createJob(req.userId!, "COLLECTION", {
+      sourceUrl: url,
+      provider: "cults3d",
+      total: body.model_ids.length,
+    });
+    void runCults3dCreationsImportJob(job.id, req.userId!, { ...body, url, username: parsed.username });
     res.status(202).json({ job_id: job.id });
   }),
 );

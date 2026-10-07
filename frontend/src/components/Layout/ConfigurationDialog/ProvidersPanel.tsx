@@ -26,6 +26,7 @@ const PROVIDERS: { id: ProviderId; name: string; comingSoon?: boolean }[] = [
   { id: "makerworld", name: "MakerWorld" },
   { id: "thingiverse", name: "Thingiverse" },
   { id: "printables", name: "Printables" },
+  { id: "cults3d", name: "Cults3D" },
   { id: "thangs", name: "Thangs", comingSoon: true },
 ];
 const isComingSoon = (id: ProviderId) => PROVIDERS.some((provider) => provider.id === id && provider.comingSoon);
@@ -47,6 +48,7 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
     makerworld: Boolean(cookie.trim()),
     thingiverse: null,
     printables: true,
+    cults3d: null,
     thangs: false,
   });
   const [menu, setMenu] = React.useState<{ id: ProviderId; top: number; left: number } | null>(null);
@@ -64,6 +66,10 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
       .getThingiverse()
       .then((res) => active && setConnected((current) => ({ ...current, thingiverse: res.configured })))
       .catch(() => undefined);
+    settingsApi
+      .getCults3d()
+      .then((res) => active && setConnected((current) => ({ ...current, cults3d: res.configured })))
+      .catch(() => undefined);
     return () => {
       active = false;
     };
@@ -75,11 +81,12 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
     if (isComingSoon(id)) return t("providers.comingSoon");
     if (id === "printables") return t("providers.printables.alwaysConnected");
     if (id === "thingiverse" && !isAdmin) return t("providers.thingiverse.adminOnly");
+    if (id === "cults3d" && !isAdmin) return t("providers.cults3d.adminOnly");
     return null;
   };
 
   /** Saves a credential, or removes it with null. */
-  const save = async (id: ProviderId, value: string | null) => {
+  const save = async (id: ProviderId, value: string | null, secondValue?: string) => {
     if (id === "makerworld") {
       const result = await settingsApi.updateMakerworld(value);
       onUpdateMakerWorld({ cookie: value ?? "" });
@@ -87,6 +94,9 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
     } else if (id === "thingiverse") {
       const result = await settingsApi.updateThingiverse(value);
       setConnected((current) => ({ ...current, thingiverse: result.configured }));
+    } else if (id === "cults3d") {
+      const result = await settingsApi.updateCults3d(value, secondValue ?? null);
+      setConnected((current) => ({ ...current, cults3d: result.configured }));
     }
   };
 
@@ -122,7 +132,7 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
     if (!ok) return;
     setError(null);
     try {
-      await save(id, null);
+      await save(id, null, id === "cults3d" ? "" : undefined);
       if (connecting === id) setConnecting(null);
     } catch (err) {
       if (err instanceof UnauthorizedError) onUnauthorized?.();
@@ -236,8 +246,8 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
           id={connecting}
           name={nameOf(connecting)}
           onCancel={() => setConnecting(null)}
-          onConnect={async (value) => {
-            await save(connecting, value);
+          onConnect={async (value, secondValue) => {
+            await save(connecting, value, secondValue);
             setConnecting(null);
           }}
           onUnauthorized={onUnauthorized}
@@ -251,13 +261,14 @@ type ConnectBoxProps = {
   id: ProviderId;
   name: string;
   onCancel: () => void;
-  onConnect: (value: string) => Promise<void>;
+  onConnect: (value: string, secondValue?: string) => Promise<void>;
   onUnauthorized?: () => void;
 };
 
 function ConnectBox({ id, name, onCancel, onConnect, onUnauthorized }: ConnectBoxProps) {
   const { t } = useTranslation(["app", "common"]);
   const [draft, setDraft] = React.useState("");
+  const [userDraft, setUserDraft] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const steps = t(`providers.${id}.steps`, { returnObjects: true }) as string[];
@@ -271,6 +282,20 @@ function ConnectBox({ id, name, onCancel, onConnect, onUnauthorized }: ConnectBo
 
   const submit = async () => {
     const value = draft.trim();
+    if (id === "cults3d") {
+      const user = userDraft.trim();
+      if (!value || !user) return;
+      setSaving(true);
+      setError(null);
+      try {
+        await onConnect(value, user);
+      } catch (err) {
+        if (err instanceof UnauthorizedError) onUnauthorized?.();
+        else setError(err instanceof Error ? err.message : t("providers.failed"));
+        setSaving(false);
+      }
+      return;
+    }
     if (!value) return;
     setSaving(true);
     setError(null);
@@ -327,13 +352,28 @@ function ConnectBox({ id, name, onCancel, onConnect, onUnauthorized }: ConnectBo
         // oxlint-disable-next-line jsx-a11y/no-autofocus
         autoFocus
       />
+      {id === "cults3d" && (
+        <TextField
+          fullWidth
+          size="small"
+          value={userDraft}
+          onChange={(e) => setUserDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void submit();
+          }}
+          placeholder={t("providers.cults3d.userPlaceholder")}
+          disabled={saving}
+          autoComplete="off"
+          sx={{ mt: 1.5 }}
+        />
+      )}
       {error && (
         <Alert severity="error" sx={{ mt: 1.5 }} onClose={() => setError(null)}>
           {error}
         </Alert>
       )}
       <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
-        <Button size="small" variant="contained" onClick={() => void submit()} disabled={saving || !draft.trim()}>
+        <Button size="small" variant="contained" onClick={() => void submit()} disabled={saving || !draft.trim() || (id === "cults3d" && !userDraft.trim())}>
           {saving ? t("providers.connecting") : t("providers.connect")}
         </Button>
         <Button size="small" onClick={onCancel} disabled={saving}>
