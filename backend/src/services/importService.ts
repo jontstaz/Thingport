@@ -994,6 +994,7 @@ async function importCults3dModel(
   author: Author | null;
   previewImages: PreviewImage[];
   alreadyImported: boolean;
+  filesPending?: boolean;
 }> {
   let resolved;
   try {
@@ -1047,6 +1048,8 @@ async function importCults3dModel(
     authorId: author?.id ?? null,
     sourceProvider: source.provider,
     sourceExternalId: source.externalId,
+    // Zero plates are fine: a metadata-only "wishlist" print whose files attach later.
+    allowNoPlates: downloaded.length === 0,
   };
 
   try {
@@ -1068,7 +1071,7 @@ async function importCults3dModel(
       where: { printId: result.print.id },
       orderBy: { position: "asc" },
     });
-    return { ...result, author, previewImages, alreadyImported: false };
+    return { ...result, author, previewImages, alreadyImported: false, filesPending: downloaded.length === 0 };
   } finally {
     for (const input of downloaded) {
       if (input.tempFilePath && fsSync.existsSync(input.tempFilePath)) {
@@ -1086,6 +1089,9 @@ type ImportResult = {
   alreadyImported: boolean;
   /** Set when an existing MakerWorld print gained another profile's file. */
   profileAdded?: boolean;
+  /** Set when the print was created without any files (metadata-only import, e.g. a Cults3D
+   * model that's paid and not yet purchased). */
+  filesPending?: boolean;
 };
 
 /** Returns the existing print with `alreadyImported: true` instead of re-downloading a model

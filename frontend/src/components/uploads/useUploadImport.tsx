@@ -3,7 +3,7 @@ import React, { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { UnauthorizedError } from "../../api/client";
-import { importsApi, type ImportOutcome, type MakerworldProfileScope } from "../../api/imports";
+import { importsApi, type ImportOutcome, type ImportPrintResult, type MakerworldProfileScope } from "../../api/imports";
 import { printsApi, type Print } from "../../api/prints";
 import {
   entriesFromFileList,
@@ -222,10 +222,11 @@ export function useUploadImport({ onUploaded, categoryId, makerworldCookie, onUn
     />
   );
 
-  const showImportedToast = (imported: Print & { import_outcome?: ImportOutcome }) => {
+  const showImportedToast = (imported: ImportPrintResult) => {
     const name = imported.title || imported.name;
-    const key =
-      imported.import_outcome === "profile_added"
+    const key = imported.files_pending
+      ? "uploadBar.importedFilesPending"
+      : imported.import_outcome === "profile_added"
         ? "uploadBar.profileAdded"
         : imported.import_outcome === "already_imported"
           ? "uploadBar.alreadyInLibrary"

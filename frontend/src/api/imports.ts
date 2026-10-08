@@ -81,8 +81,11 @@ type ImportLinkPayload = {
 /** "profile_added": an existing MakerWorld model gained another profile's file. */
 export type ImportOutcome = "created" | "profile_added" | "already_imported";
 
+/** The print was created without any files (e.g. a paid Cults3D model not yet purchased). */
+export type ImportPrintResult = Print & { import_outcome?: ImportOutcome; files_pending?: boolean };
+
 export const importsApi = {
-  fromLink: async (payload: ImportLinkPayload): Promise<Print & { import_outcome?: ImportOutcome }> => {
+  fromLink: async (payload: ImportLinkPayload): Promise<ImportPrintResult> => {
     const res = await fetch(`${apiBase()}/import`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),

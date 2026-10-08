@@ -92,6 +92,7 @@
       "multiplateImportFailedWithMessage": "Multi-file import ({{message}})",
       "multiplateImportFailed": "Multi-file import",
       "imported": "Imported \"{{name}}\"",
+      "importedFilesPending": "Saved \"{{name}}\" without files -- its source page has none you can download yet. You can add files to it later.",
       "profileAdded": "Added a print profile to \"{{name}}\"",
       "alreadyInLibrary": "\"{{name}}\" is already in your library",
       "uploaded": "Uploaded \"{{name}}\"",

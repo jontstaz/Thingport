@@ -93,7 +93,11 @@ async function importAndDescribe(userId: string, url: string, body: z.infer<type
   const { print, plates, author, previewImages } = result;
   const importOutcome = result.alreadyImported ? "already_imported" : result.profileAdded ? "profile_added" : "created";
   void createLog({ userId, action: "model_imported", targetId: print.id, details: { name: print.name, url } });
-  return { ...toPrintOut(print, plates, [], null, author, previewImages), import_outcome: importOutcome };
+  return {
+    ...toPrintOut(print, plates, [], null, author, previewImages),
+    import_outcome: importOutcome,
+    files_pending: result.filesPending === true,
+  };
 }
 
 // `?async=1` answers 202 with a task id to poll at /import/tasks/:id (see importTaskService.ts).

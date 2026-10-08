@@ -46,6 +46,9 @@ export type PrintMetaInput = {
   /** Backs de-duplication of future imports of the same source model. */
   sourceProvider?: string | null;
   sourceExternalId?: string | null;
+  /** A file-less "bookmark" print: metadata and images only, files attachable later. Only
+   * meaningful for imports that know their source; a plain upload always has a file. */
+  allowNoPlates?: boolean;
 };
 
 async function placeFile(input: NewPlateInput, destAbsPath: string): Promise<string | null> {
@@ -161,7 +164,9 @@ export async function createPrint(
   nameHint: string,
   plateInputs: NewPlateInput[],
 ): Promise<{ print: Print; plates: Plate[] }> {
-  if (!plateInputs.length) throw new Error("createPrint requires at least one plate");
+  if (!plateInputs.length && !meta.allowNoPlates) {
+    throw new Error("createPrint requires at least one plate");
+  }
   // categoryId may come straight from a request body, so verify ownership here.
   if (meta.categoryId) {
     const category = await prisma.category.findFirst({ where: { id: meta.categoryId, userId } });
