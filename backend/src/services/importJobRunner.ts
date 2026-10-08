@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { mapWithConcurrency, sleep } from "../utils/concurrency";
+import { getUserCults3dCookie } from "./cults3dCookieService";
 import { IMPORT_COLLECTION_DELAY_MS, IMPORT_MAKERWORLD_CALL_DELAY_MS } from "../config";
 import { countJobItems, getJob, getJobStatus, listJobItems, updateJob, updateJobItem } from "./importJobService";
 import { createNotification } from "./notificationService";
@@ -566,6 +567,9 @@ export async function runCults3dCreationsImportJob(
     const failed: string[] = [];
     const successPrintIds: string[] = [];
 
+    // Downloads need the owner's site session: the API key only covers GraphQL metadata. Read it
+    // once, live, so a reconnected account fixes the rest of a running job.
+    const sessionCookie = body.cults3d_cookie?.trim() || (await getUserCults3dCookie(userId)) || undefined;
     await mapWithConcurrency(body.model_ids, COLLECTION_IMPORT_CONCURRENCY, async (modelId, index) => {
       const modelUrl = `https://cults3d.com/en/3d-model/${modelId}`;
       const itemBody: ImportRequestBody = {
@@ -573,6 +577,7 @@ export async function runCults3dCreationsImportJob(
         notes: body.notes ?? null,
         tags: body.tags ?? [],
         category_id: body.category_id ?? null,
+        cults3d_cookie: sessionCookie,
       };
       try {
         const { print, alreadyImported } = await importPrintFromUrl(userId, modelUrl, itemBody);
@@ -584,7 +589,11 @@ export async function runCults3dCreationsImportJob(
         const reason = classifyImportFailure(err);
         if (reason === "unavailable") unavailable++;
         else if (reason === "rateLimited") rateLimited++;
-        else if (err instanceof HttpError && err.status === 400 && /Cults3D API credentials/.test(err.message))
+        else if (
+          err instanceof HttpError &&
+          err.status === 400 &&
+          /Cults3D API credentials|session cookie|logged-in account/i.test(err.message)
+        )
           authFailed++;
       } finally {
         processed++;
@@ -631,7 +640,7 @@ export async function runCults3dCreationsImportJob(
     const otherFailed = failed.length - unavailable - rateLimited - authFailed;
     if (unavailable) bodyParts.push(`${unavailable} unavailable (deleted or not public)`);
     if (rateLimited) bodyParts.push(`${rateLimited} rate-limited by Cults3D — wait a bit, then retry`);
-    if (authFailed) bodyParts.push(`${authFailed} need re-purchased/paid files the API account can't download`);
+    if (authFailed) bodyParts.push(`${authFailed} need a (re)connected Cults3D account or purchased files`);
     if (otherFailed) bodyParts.push(`${otherFailed} failed`);
     await createNotification(userId, {
       title: `Imported ${imported} of ${body.model_ids.length} models from Cults3D`,

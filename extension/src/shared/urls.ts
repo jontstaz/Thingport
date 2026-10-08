@@ -50,6 +50,10 @@ export function isMakerworldUrl(url: string | undefined | null): boolean {
   return Boolean(url) && (Boolean(parseMakerworldModelUrl(url!)) || isMakerworldCollectionUrl(url!));
 }
 
+export function isCults3dUrl(url: string | undefined | null): boolean {
+  return Boolean(url) && (Boolean(parseCults3dModelUrl(url!)) || isCults3dCreationsUrl(url!));
+}
+
 export function parseThingiverseThingUrl(url: string): { thingId: string } | null {
   const parsed = parse(url);
   if (!parsed || !isHost(parsed, "thingiverse.com")) return null;

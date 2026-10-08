@@ -66,9 +66,10 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
       .getThingiverse()
       .then((res) => active && setConnected((current) => ({ ...current, thingiverse: res.configured })))
       .catch(() => undefined);
-    settingsApi
-      .getCults3d()
-      .then((res) => active && setConnected((current) => ({ ...current, cults3d: res.configured })))
+    // Cults3D imports fully work only with both: the instance API pair (metadata) and the user's
+    // own session cookie (file downloads).
+    Promise.all([settingsApi.getCults3d(), settingsApi.getCults3dCookie()])
+      .then(([api, cookie]) => active && setConnected((current) => ({ ...current, cults3d: api.configured && cookie.configured })))
       .catch(() => undefined);
     return () => {
       active = false;
@@ -81,12 +82,11 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
     if (isComingSoon(id)) return t("providers.comingSoon");
     if (id === "printables") return t("providers.printables.alwaysConnected");
     if (id === "thingiverse" && !isAdmin) return t("providers.thingiverse.adminOnly");
-    if (id === "cults3d" && !isAdmin) return t("providers.cults3d.adminOnly");
     return null;
   };
 
   /** Saves a credential, or removes it with null. */
-  const save = async (id: ProviderId, value: string | null, secondValue?: string) => {
+  const save = async (id: ProviderId, value: string | null, secondValue?: { key: string; user: string }) => {
     if (id === "makerworld") {
       const result = await settingsApi.updateMakerworld(value);
       onUpdateMakerWorld({ cookie: value ?? "" });
@@ -95,8 +95,14 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
       const result = await settingsApi.updateThingiverse(value);
       setConnected((current) => ({ ...current, thingiverse: result.configured }));
     } else if (id === "cults3d") {
-      const result = await settingsApi.updateCults3d(value, secondValue ?? null);
-      setConnected((current) => ({ ...current, cults3d: result.configured }));
+      // value is the per-user session cookie; admins can additionally pass the API pair.
+      const cookie = await settingsApi.updateCults3dCookie(value);
+      let apiConfigured = true;
+      if (isAdmin && secondValue != null) {
+        const result = await settingsApi.updateCults3d(secondValue.key, secondValue.user);
+        apiConfigured = result.configured;
+      }
+      setConnected((current) => ({ ...current, cults3d: apiConfigured && cookie.configured }));
     }
   };
 
@@ -132,7 +138,7 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
     if (!ok) return;
     setError(null);
     try {
-      await save(id, null, id === "cults3d" ? "" : undefined);
+      await save(id, null, id === "cults3d" && isAdmin ? { key: "", user: "" } : undefined);
       if (connecting === id) setConnecting(null);
     } catch (err) {
       if (err instanceof UnauthorizedError) onUnauthorized?.();
@@ -245,6 +251,7 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
           key={connecting}
           id={connecting}
           name={nameOf(connecting)}
+          isAdmin={isAdmin}
           onCancel={() => setConnecting(null)}
           onConnect={async (value, secondValue) => {
             await save(connecting, value, secondValue);
@@ -260,19 +267,21 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
 type ConnectBoxProps = {
   id: ProviderId;
   name: string;
+  isAdmin: boolean;
   onCancel: () => void;
-  onConnect: (value: string, secondValue?: string) => Promise<void>;
+  onConnect: (value: string, secondValue?: { key: string; user: string }) => Promise<void>;
   onUnauthorized?: () => void;
 };
 
-function ConnectBox({ id, name, onCancel, onConnect, onUnauthorized }: ConnectBoxProps) {
+function ConnectBox({ id, name, isAdmin, onCancel, onConnect, onUnauthorized }: ConnectBoxProps) {
   const { t } = useTranslation(["app", "common"]);
   const [draft, setDraft] = React.useState("");
+  const [keyDraft, setKeyDraft] = React.useState("");
   const [userDraft, setUserDraft] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const steps = t(`providers.${id}.steps`, { returnObjects: true }) as string[];
-  const multiline = id === "makerworld";
+  const multiline = id === "makerworld" || id === "cults3d";
   const rootRef = React.useRef<HTMLDivElement | null>(null);
 
   // It opens below the icons, often past the bottom of the panel.
@@ -283,12 +292,16 @@ function ConnectBox({ id, name, onCancel, onConnect, onUnauthorized }: ConnectBo
   const submit = async () => {
     const value = draft.trim();
     if (id === "cults3d") {
+      // The session cookie (draft) is required: downloads authorize it. The API pair is optional
+      // and admin-only; both halves together or neither.
+      if (!value) return;
+      const key = keyDraft.trim();
       const user = userDraft.trim();
-      if (!value || !user) return;
+      if (isAdmin && Boolean(key) !== Boolean(user)) return;
       setSaving(true);
       setError(null);
       try {
-        await onConnect(value, user);
+        await onConnect(value, isAdmin && key && user ? { key, user } : undefined);
       } catch (err) {
         if (err instanceof UnauthorizedError) onUnauthorized?.();
         else setError(err instanceof Error ? err.message : t("providers.failed"));
@@ -352,20 +365,35 @@ function ConnectBox({ id, name, onCancel, onConnect, onUnauthorized }: ConnectBo
         // oxlint-disable-next-line jsx-a11y/no-autofocus
         autoFocus
       />
-      {id === "cults3d" && (
-        <TextField
-          fullWidth
-          size="small"
-          value={userDraft}
-          onChange={(e) => setUserDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void submit();
-          }}
-          placeholder={t("providers.cults3d.userPlaceholder")}
-          disabled={saving}
-          autoComplete="off"
-          sx={{ mt: 1.5 }}
-        />
+      {id === "cults3d" && isAdmin && (
+        <>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.5 }}>
+            {t("providers.cults3d.apiPairOptional")}
+          </Typography>
+          <TextField
+            fullWidth
+            size="small"
+            value={keyDraft}
+            onChange={(e) => setKeyDraft(e.target.value)}
+            placeholder={t("providers.cults3d.keyPlaceholder")}
+            disabled={saving}
+            autoComplete="off"
+            sx={{ mt: 1 }}
+          />
+          <TextField
+            fullWidth
+            size="small"
+            value={userDraft}
+            onChange={(e) => setUserDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void submit();
+            }}
+            placeholder={t("providers.cults3d.userPlaceholder")}
+            disabled={saving}
+            autoComplete="off"
+            sx={{ mt: 1.5 }}
+          />
+        </>
       )}
       {error && (
         <Alert severity="error" sx={{ mt: 1.5 }} onClose={() => setError(null)}>
@@ -373,7 +401,7 @@ function ConnectBox({ id, name, onCancel, onConnect, onUnauthorized }: ConnectBo
         </Alert>
       )}
       <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
-        <Button size="small" variant="contained" onClick={() => void submit()} disabled={saving || !draft.trim() || (id === "cults3d" && !userDraft.trim())}>
+        <Button size="small" variant="contained" onClick={() => void submit()} disabled={saving || !draft.trim()}>
           {saving ? t("providers.connecting") : t("providers.connect")}
         </Button>
         <Button size="small" onClick={onCancel} disabled={saving}>

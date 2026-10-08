@@ -29,6 +29,9 @@ model User {
   passwordResetExpires     DateTime?
   // Per-user, unlike the instance-wide Thingiverse token.
   makerworldCookie         String?
+  // Per-user Cults3D session cookie: the instance-wide API key authorizes the GraphQL API, but
+  // file downloads go through the site's own endpoint, which needs a logged-in browser session.
+  cults3dCookie            String?
   slicer                   String?
   // "light" | "dark" | "system"; null means never set.
   themePreference          String?

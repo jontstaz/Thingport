@@ -11,6 +11,7 @@ export const STORAGE_KEYS = {
   tokenExpiresAt: "tokenExpiresAt",
   // Lets the cookie sync skip a redundant PATCH.
   lastSyncedMakerworldCookie: "lastSyncedMakerworldCookie",
+  lastSyncedCults3dCookie: "lastSyncedCults3dCookie",
 } as const;
 
 export type StoredConfig = {
@@ -22,6 +23,7 @@ export type StoredConfig = {
   token?: string;
   tokenExpiresAt?: number;
   lastSyncedMakerworldCookie?: string;
+  lastSyncedCults3dCookie?: string;
 };
 
 export const CONFIG_CHANGE_KEYS: readonly string[] = [

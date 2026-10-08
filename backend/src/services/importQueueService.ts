@@ -14,12 +14,14 @@ import {
   type QueuedLinkOptions,
 } from "./importJobRunner";
 import { getUserMakerworldCookie } from "./makerworldCookieService";
+import { getUserCults3dCookie } from "./cults3dCookieService";
 
-/** The shared body a LINKS job reruns with: its stored payload plus the owner's saved MakerWorld
- *  cookie. The cookie is never stored on the job. */
+/** The shared body a LINKS job reruns with: its stored payload plus the owner's saved provider
+ *  cookies. The cookies are never stored on the job. */
 async function linksJobBody(job: ImportJob): Promise<LinksImportJobBody> {
   const payload = (job.payload ?? {}) as Record<string, unknown>;
   const cookie = await getUserMakerworldCookie(job.userId);
+  const cults3dCookie = await getUserCults3dCookie(job.userId);
   return {
     url: job.sourceUrl,
     notes: (payload.notes as string | null) ?? null,
@@ -27,6 +29,7 @@ async function linksJobBody(job: ImportJob): Promise<LinksImportJobBody> {
     category_id: (payload.category_id as string | null) ?? null,
     scope: payload.scope === "designer" || payload.scope === "all" ? payload.scope : "url",
     makerworld_cookie: cookie ?? undefined,
+    cults3d_cookie: cults3dCookie ?? undefined,
   };
 }
 

@@ -3,9 +3,10 @@
 
 import type { LoginResult } from "../shared/api";
 import { apiUrl } from "../shared/storage";
-import { isMakerworldUrl } from "../shared/urls";
+import { isCults3dUrl, isMakerworldUrl } from "../shared/urls";
 import { getStoredConfig, isConfigured, type ConfiguredConfig } from "./config";
 import { getLiveMakerworldCookie, maybeSyncMakerworldCookie } from "./makerworldCookie";
+import { getLiveCults3dCookie, maybeSyncCults3dCookie } from "./cults3dCookie";
 
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
@@ -55,8 +56,8 @@ export async function requireConfig(): Promise<ConfiguredConfig> {
   return config;
 }
 
-/** `path` is after `/api`. MakerWorld `/import*` calls get the live browser cookie attached unless
- *  the caller set one. */
+/** `path` is after `/api`. Provider `/import*` calls get the matching live browser cookie attached
+ *  unless the caller set one. */
 export async function apiCall<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
   const config = await requireConfig();
 
@@ -71,6 +72,20 @@ export async function apiCall<T = unknown>(method: string, path: string, body?: 
     if (liveCookie) {
       finalBody = { ...finalBody, makerworld_cookie: liveCookie };
       void maybeSyncMakerworldCookie(config, liveCookie);
+    }
+  }
+  // Cults3D downloads authorize the site session, not the API key, so the live cookie is what
+  // makes an import downloadable at all.
+  if (
+    path.startsWith("/import") &&
+    finalBody &&
+    !finalBody.cults3d_cookie &&
+    isCults3dUrl(finalBody.url as string)
+  ) {
+    const liveCookie = await getLiveCults3dCookie();
+    if (liveCookie) {
+      finalBody = { ...finalBody, cults3d_cookie: liveCookie };
+      void maybeSyncCults3dCookie(config, liveCookie);
     }
   }
 

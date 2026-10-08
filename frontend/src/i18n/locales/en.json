@@ -807,7 +807,20 @@
       "more": "More",
       "years": "Years",
       "loadError": "Failed to load your activity.",
-      "monthsShort": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+      "monthsShort": [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec"
+      ],
       "timeline": {
         "title": "Activity timeline",
         "emptyMonth": "No activity yet this month.",
@@ -889,14 +902,17 @@
         "alwaysConnected": "Printables is connected by default: it needs no account or key."
       },
       "cults3d": {
-        "placeholder": "Paste the API key",
+        "placeholder": "_session_id=… or the whole Cookie header",
         "userPlaceholder": "API user (your Cults3D username)",
+        "apiPairOptional": "Admins can also set the instance-wide API pair (cults3d.com/en/developers) -- it powers metadata lookups for everyone. Both fields together, or leave both empty.",
         "steps": [
-          "Sign in at cults3d.com and open cults3d.com/en/developers.",
-          "Generate an API key and copy it together with your API user name.",
-          "Paste both below."
+          "Sign in at cults3d.com in your browser.",
+          "Open the developer tools (F12) and go to Application > Cookies > https://cults3d.com.",
+          "Copy the value of the _session_id cookie and paste it below -- downloads authorize this session, not the API key.",
+          "Tip: with the Thingport Grab extension installed and signed in, this happens automatically."
         ],
-        "adminOnly": "Only an admin of this Thingport can set this up."
+        "adminOnly": "Only an admin of this Thingport can set this up.",
+        "keyPlaceholder": "API key (admins, optional)"
       },
       "comingSoon": "Coming soon"
     },

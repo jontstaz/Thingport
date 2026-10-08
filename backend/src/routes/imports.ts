@@ -42,6 +42,7 @@ import {
 } from "../services/cults3dApi";
 import { getThingiverseAccessToken } from "../services/settingsService";
 import { getUserMakerworldCookie } from "../services/makerworldCookieService";
+import { getUserCults3dCookie } from "../services/cults3dCookieService";
 import { listZipEntries } from "../services/zipService";
 import { createJob, createJobItems, getActiveJob, getJob, listJobItems } from "../services/importJobService";
 import { queueLink, startLinksJob } from "../services/importQueueService";
@@ -71,6 +72,8 @@ const importRequestSchema = z.object({
   category_id: z.string().nullable().optional(),
   filename: z.string().nullable().optional(),
   makerworld_cookie: z.string().nullable().optional(),
+  // The user's Cults3D session cookie; downloads need a site login the API key can't stand in for.
+  cults3d_cookie: z.string().nullable().optional(),
   // Resolved by the extension in the page itself. Skips the backend's own resolution, which is
   // what trips MakerWorld's CAPTCHA.
   resolved_download_url: z.string().nullable().optional(),
@@ -86,6 +89,23 @@ async function withStoredMakerworldCookie<T extends { makerworld_cookie?: string
   if (body.makerworld_cookie && body.makerworld_cookie.trim()) return body;
   const stored = await getUserMakerworldCookie(userId);
   return stored ? { ...body, makerworld_cookie: stored } : body;
+}
+
+// Same fallback for the per-user Cults3D session cookie.
+async function withStoredCults3dCookie<T extends { cults3d_cookie?: string | null }>(
+  userId: string,
+  body: T,
+): Promise<T> {
+  if (body.cults3d_cookie && body.cults3d_cookie.trim()) return body;
+  const stored = await getUserCults3dCookie(userId);
+  return stored ? { ...body, cults3d_cookie: stored } : body;
+}
+
+/** Applies every provider-cookie fallback to an import request body. */
+async function withStoredProviderCookies<
+  T extends { makerworld_cookie?: string | null; cults3d_cookie?: string | null },
+>(userId: string, body: T): Promise<T> {
+  return withStoredCults3dCookie(userId, await withStoredMakerworldCookie(userId, body));
 }
 
 async function importAndDescribe(userId: string, url: string, body: z.infer<typeof importRequestSchema>) {
@@ -105,7 +125,7 @@ router.post(
   "/import",
   requireCaptcha("import"),
   asyncHandler(async (req, res) => {
-    const body = await withStoredMakerworldCookie(req.userId!, parseBody(importRequestSchema, req.body));
+    const body = await withStoredProviderCookies(req.userId!, parseBody(importRequestSchema, req.body));
     const url = await normalizeImportUrl(body.url);
     if (req.query.async === "1") {
       const taskId = startImportTask(req.userId!, () => importAndDescribe(req.userId!, url, body));
@@ -128,7 +148,7 @@ router.get(
 router.post(
   "/import/inspect",
   asyncHandler(async (req, res) => {
-    const body = await withStoredMakerworldCookie(req.userId!, parseBody(importRequestSchema, req.body));
+    const body = await withStoredProviderCookies(req.userId!, parseBody(importRequestSchema, req.body));
     const url = await normalizeImportUrl(body.url);
     const result = await inspectImportLink(url, body);
     res.json(result);
@@ -148,7 +168,7 @@ router.get(
 router.post(
   "/import/zip/entries",
   asyncHandler(async (req, res) => {
-    const body = await withStoredMakerworldCookie(req.userId!, parseBody(importRequestSchema, req.body));
+    const body = await withStoredProviderCookies(req.userId!, parseBody(importRequestSchema, req.body));
     const url = await normalizeImportUrl(body.url);
     const { tempPath, filename } = await downloadImportToTemp(url, body);
     try {
@@ -165,7 +185,7 @@ router.post(
 router.post(
   "/import/collection/entries",
   asyncHandler(async (req, res) => {
-    const body = await withStoredMakerworldCookie(req.userId!, parseBody(importRequestSchema, req.body));
+    const body = await withStoredProviderCookies(req.userId!, parseBody(importRequestSchema, req.body));
     const url = await normalizeImportUrl(body.url);
     const parsed = parseMakerworldCollectionUrl(url);
     if (!parsed) throw new HttpError(400, "Not a MakerWorld collection URL");

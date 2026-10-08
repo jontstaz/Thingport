@@ -215,6 +215,27 @@ export const settingsApi = {
     return res.json();
   },
 
+  // Per-user session cookie; file downloads authorize it, not the instance-wide API key above.
+  getCults3dCookie: async (): Promise<{ configured: boolean }> => {
+    const res = await fetch(`${apiBase()}/settings/cults3d-cookie`, { headers: authHeaders() });
+    assertOk(res, "Failed to load Cults3D download settings");
+    return res.json();
+  },
+
+  // Clearing (null) is never verified.
+  updateCults3dCookie: async (cookie: string | null): Promise<{ configured: boolean }> => {
+    const res = await fetch(`${apiBase()}/settings/cults3d-cookie`, {
+      method: "PATCH",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ cookie, verify: true }),
+    });
+    if (res.status === 401) throw new UnauthorizedError();
+    if (!res.ok) {
+      throw new Error(await readErrorMessage(res, "Failed to update Cults3D download settings"));
+    }
+    return res.json();
+  },
+
   getAuth: async (): Promise<AuthSettings> => {
     const res = await fetch(`${apiBase()}/settings/auth`, { headers: authHeaders() });
     assertOk(res, "Failed to load session settings");

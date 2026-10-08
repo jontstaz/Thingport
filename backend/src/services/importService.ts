@@ -66,10 +66,12 @@ import {
 import {
   Cults3dAuthError,
   Cults3dRateLimitError,
+  normalizeCults3dCookie,
   parseCults3dModelUrl,
   resolveCults3dModel,
 } from "./cults3dApi";
 import { getCults3dCredentialsForRequest, getThingiverseAccessToken } from "./settingsService";
+import { getUserCults3dCookie } from "./cults3dCookieService";
 import { upsertAuthorFromImport } from "./authorService";
 import {
   addPlatesToPrint,
@@ -105,6 +107,9 @@ export type ImportRequestBody = ImportCookies & {
   /** The page's MakerWorld design data, so the backend needn't fetch a Cloudflare-gated page.
    *  Client-supplied -- see makerworldMetaFromExtension. */
   makerworld_design?: Record<string, unknown> | null;
+  /** The user's Cults3D session cookie (per-user setting or the extension's live capture). Cults3D
+   *  downloads require a logged-in site session; the API key pair only covers GraphQL metadata. */
+  cults3d_cookie?: string | null;
   /** Internal only: per-request delay for MakerWorld collection imports. Never from the body. */
   makerworldPaceMs?: number;
 };
@@ -729,7 +734,12 @@ export async function findImportedExternalIds(
 
 export const MULTI_FILE_PLATE_EXTS = new Set([...IMPORT_ALLOWED_EXTS].filter((ext) => ext !== ".zip"));
 
-export type PlainDownloadResult = { input: NewPlateInput } | { rateLimited: true } | null;
+export type PlainDownloadResult =
+  | { input: NewPlateInput }
+  | { rateLimited: true }
+  /** The endpoint demanded a site login (or rejected the session cookie). */
+  | { authRequired: true }
+  | null;
 
 /** Best-effort: null on failure so one bad file doesn't fail the whole import, except a 429,
  * which is reported so the caller can say why. */
@@ -756,12 +766,15 @@ export async function downloadPlainFileToTemp(url: string, suggestedName: string
   }
 }
 
-/** Like downloadPlainFileToTemp, but with the Cults3D Basic credentials the site's download
- * endpoint requires. Cloudflare fronts cults3d.com, so blocks surface as rateLimited. */
+/** Like downloadPlainFileToTemp, but for Cults3D's site download endpoint. It authorizes the
+ * user's logged-in session cookie -- the API key pair covers only the GraphQL metadata API, and an
+ * API-key-only request is redirected to the sign-in page. Cloudflare fronts cults3d.com, so blocks
+ * surface as rateLimited. */
 async function downloadCults3dFileToTemp(
   url: string,
   suggestedName: string,
   creds: { apiKey: string; apiUser: string },
+  cookie: string | null,
 ): Promise<PlainDownloadResult> {
   try {
     const res = await rawFetch(url, {
@@ -769,20 +782,29 @@ async function downloadCults3dFileToTemp(
       Accept: "*/*",
       Authorization: `Basic ${Buffer.from(`${creds.apiUser}:${creds.apiKey}`).toString("base64")}`,
       Referer: "https://cults3d.com/",
+      ...(cookie ? { Cookie: normalizeCults3dCookie(cookie) } : {}),
     });
     if (res.status === 429 || (res.status === 403 && looksLikeCloudflareBlock(res.headers))) {
       await res.body?.cancel().catch(() => undefined);
       return { rateLimited: true };
+    }
+    // A redirect to the sign-in page means the endpoint never accepted the session: no cookie was
+    // sent, or the one sent expired.
+    const finalUrl = res.url || "";
+    if (/\/users\/sign_in/i.test(finalUrl)) {
+      await res.body?.cancel().catch(() => undefined);
+      return { authRequired: true };
     }
     if (!res.ok) {
       await res.body?.cancel().catch(() => undefined);
       return null;
     }
     const contentType = res.headers.get("content-type") || "";
-    // A paid model the API user doesn't own redirects to the HTML product page, not a file.
     if (isHtmlContentType(contentType)) {
       await res.body?.cancel().catch(() => undefined);
-      return null;
+      // Logged in but served the HTML product page: a paid model the account hasn't purchased.
+      // Without a cookie this same HTML is just the anonymous download wall.
+      return cookie ? null : { authRequired: true };
     }
     const filename = sanitizeFilename(suggestedName);
     const tempFilePath = path.join(
@@ -1010,30 +1032,36 @@ async function importCults3dModel(
   const { meta, downloadUrls, galleryImages } = resolved;
 
   // No download links come from the API itself; each blueprint downloads from the site's
-  // /download/blueprint/{id} endpoint with the same Basic credentials. Paid models the API user
-  // hasn't purchased redirect to the product page instead of a file, so filter to importable
-  // model extensions first.
+  // /download/blueprint/{id} endpoint, which requires the user's logged-in session cookie. Paid
+  // models the user hasn't purchased redirect to the product page instead of a file, so filter to
+  // importable model extensions first.
   const modelFiles = downloadUrls.filter((f) => {
     const ext = path.extname(f.name).toLowerCase();
     return ext === "" || IMPORT_ALLOWED_EXTS.has(ext);
   });
-  if (!modelFiles.length) {
-    throw new HttpError(
-      400,
-      "This Cults3D model has no downloadable model files (paid files the API account hasn't purchased, or non-model formats).",
-    );
-  }
 
-  const creds = await getCults3dCredentialsForRequest();
-  const downloadResults = await Promise.all(
-    modelFiles.map((file) => downloadCults3dFileToTemp(file.url, file.name, creds)),
-  );
-  const downloaded = downloadResults
-    .filter((result): result is { input: NewPlateInput } => result !== null && "input" in result)
-    .map((result) => result.input);
-  if (!downloaded.length) {
-    throw new HttpError(400, "None of this model's files could be downloaded.");
+  let downloaded: NewPlateInput[] = [];
+  if (modelFiles.length) {
+    let creds: { apiKey: string; apiUser: string } | null = null;
+    try {
+      creds = await getCults3dCredentialsForRequest();
+    } catch {
+      creds = null; // Verification already passed at connect time; proceed metadata-only.
+    }
+    if (creds) {
+      // The request's cookie wins (the extension sends the live one); otherwise the saved per-user one.
+      const cookie = body.cults3d_cookie?.trim() || (await getUserCults3dCookie(userId)) || null;
+      const downloadResults = await Promise.all(
+        modelFiles.map((file) => downloadCults3dFileToTemp(file.url, file.name, creds!, cookie)),
+      );
+      downloaded = downloadResults
+        .filter((result): result is { input: NewPlateInput } => result !== null && "input" in result)
+        .map((result) => result.input);
+    }
   }
+  // Metadata-first: whatever failed above (no cookie, rejected session, paid and not purchased,
+  // Cloudflare challenge, or simply no files), the print is still created as a wishlist entry --
+  // files attach later via Edit > add files. files_pending tells the UI to say so.
 
   const author = await upsertAuthorFromImport(meta.author ?? null);
   const categoryId =

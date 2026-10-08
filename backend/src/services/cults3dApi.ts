@@ -1,11 +1,14 @@
 import { IMPORT_BROWSER_USER_AGENT, IMPORT_TIMEOUT_SECONDS } from "../config";
 import { HttpError } from "../utils/fileUtils";
+import { looksLikeCloudflareBlock } from "./flaresolverr";
 import { type ImportedAuthorInfo, type ImportedPageMetadata } from "./importResolvers";
 
-// Verified live against the public API (Nov 2025): https://cults3d.com/graphql, HTTP Basic auth
-// with "apiUser:apiKey". There is no api.cults3d.com host. The API exposes rich metadata but no
-// download links (blueprints.fileUrl is always null); downloads go through the site's
-// /download/blueprint/{id} endpoint with the same credentials.
+// https://cults3d.com/graphql, HTTP Basic auth with "apiUser:apiKey". There is no api.cults3d.com
+// host. The API exposes rich metadata but no download links: blueprints.fileUrl is populated only
+// on the API account's OWN designs, and even the downloadUrl on ordersBatch lines is documented by
+// the Cults team (#api-help) as needing a logged-in browser cookie. So downloads go through the
+// site's /download/blueprint/{id} endpoint with the user's session cookie -- the Basic pair no
+// longer authorizes it (an anonymous/API-key request is redirected to the sign-in or product page).
 const CULTS3D_GRAPHQL_URL = "https://cults3d.com/graphql";
 const API_TIMEOUT_MS = IMPORT_TIMEOUT_SECONDS * 1000;
 const CULTS3D_PROVIDER = "cults3d";
@@ -173,6 +176,10 @@ export type Cults3dModelData = {
   meta: Partial<ImportedPageMetadata>;
   downloadUrls: Cults3dDownloadFile[];
   galleryImages: Cults3dGalleryImage[];
+  /** True when the design has a nonzero fixed price (open-priced "name your price" stays false):
+   *  its files then exist only for buyers, so a failed download means "not purchased", not an
+   *  error -- the import can proceed as a metadata-only wishlist print. */
+  priced: boolean;
 };
 
 function extractAuthor(creator: unknown): ImportedAuthorInfo | null {
@@ -264,8 +271,11 @@ export async function resolveCults3dModel(slug: string): Promise<Cults3dModelDat
   if (galleryImages.length) meta.previewImageUrl = galleryImages[0].url;
   meta.galleryImages = galleryImages;
 
-  // No download links come from the API (fileUrl is always null); the site's download endpoint
-  // takes the numeric blueprint id and checks the same Basic credentials.
+  // No download links come from the API (fileUrl is null on other people's designs); the site's
+  // download endpoint takes the numeric blueprint id and checks the user's session cookie.
+  const priceCents =
+    isRecord(creation.price) && typeof creation.price.cents === "number" ? creation.price.cents : 0;
+  const priced = priceCents > 0 && creation.openPriced !== true;
   const downloadUrls: Cults3dDownloadFile[] = [];
   if (Array.isArray(creation.blueprints)) {
     for (const bp of creation.blueprints) {
@@ -289,7 +299,60 @@ export async function resolveCults3dModel(slug: string): Promise<Cults3dModelDat
     }
   }
 
-  return { meta, downloadUrls, galleryImages };
+  return { meta, downloadUrls, galleryImages, priced };
+}
+
+/** Accepts a bare `_session_id` value or a full Cookie header; the download endpoint only needs
+ *  the session cookie. */
+export function normalizeCults3dCookie(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.includes("=") ? trimmed : `_session_id=${trimmed}`;
+}
+
+export type Cults3dCookieCheck =
+  | { result: "valid" }
+  | { result: "invalid" }
+  | { result: "unverifiable"; reason: "network" | "cloudflare" };
+
+/** Checks a session cookie against a logged-in-only page: anonymous visitors are redirected to
+ *  /users/sign_in, so a redirect there means the cookie is no good. */
+export async function verifyCults3dCookie(cookie: string): Promise<Cults3dCookieCheck> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch("https://cults3d.com/en/orders", {
+      headers: {
+        "User-Agent": IMPORT_BROWSER_USER_AGENT,
+        Accept: "text/html,application/xhtml+xml",
+        Cookie: normalizeCults3dCookie(cookie),
+      },
+      redirect: "manual",
+      signal: controller.signal,
+    });
+  } catch {
+    return { result: "unverifiable", reason: "network" };
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  try {
+    if (res.status === 403 && looksLikeCloudflareBlock(res.headers)) {
+      return { result: "unverifiable", reason: "cloudflare" };
+    }
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location") || "";
+      return /\/users\/sign_in/i.test(location) ? { result: "invalid" } : { result: "valid" };
+    }
+    if (!res.ok) return { result: "unverifiable", reason: "network" };
+    // A 200 that still renders the sign-in form means the cookie wasn't accepted.
+    const text = (await res.text()).slice(0, 200_000);
+    return /\/users\/sign_in/i.test(text) ? { result: "invalid" } : { result: "valid" };
+  } catch {
+    return { result: "unverifiable", reason: "network" };
+  } finally {
+    await res.body?.cancel().catch(() => undefined);
+  }
 }
 
 export type Cults3dUserEntry = { modelId: string; title: string; cover: string | null };

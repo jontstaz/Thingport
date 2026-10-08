@@ -31,6 +31,8 @@ import {
   validateStorageTemplate,
 } from "../services/printService";
 import { getUserMakerworldCookie, setUserMakerworldCookie } from "../services/makerworldCookieService";
+import { getUserCults3dCookie, setUserCults3dCookie } from "../services/cults3dCookieService";
+import { type Cults3dCookieCheck, verifyCults3dCookie } from "../services/cults3dApi";
 import { type MakerworldCookieCheck, verifyMakerworldCookie } from "../services/makerworldCloudApi";
 import { verifyThingiverseAccessToken } from "../services/thingiverseApi";
 import {
@@ -379,6 +381,48 @@ router.patch(
       if (check.result === "unverifiable") throw new HttpError(503, MAKERWORLD_UNVERIFIABLE_MESSAGES[check.reason]);
     }
     const configured = await setUserMakerworldCookie(req.userId!, body.cookie);
+    res.json({ configured });
+  }),
+);
+
+// Per-user Cults3D session cookie, needed for file downloads: the instance-wide API key above
+// authorizes only the GraphQL metadata API, not the site's download endpoint. GET never echoes it.
+router.get(
+  "/settings/cults3d-cookie",
+  asyncHandler(async (req, res) => {
+    res.json({ configured: Boolean(await getUserCults3dCookie(req.userId!)) });
+  }),
+);
+
+// `verify` is opt-in: the extension's background sync sends a cookie it already knows works.
+const CULTS3D_UNVERIFIABLE_MESSAGES: Record<
+  Extract<Cults3dCookieCheck, { result: "unverifiable" }>["reason"],
+  string
+> = {
+  cloudflare:
+    "Couldn't check this cookie: Cults3D's Cloudflare protection blocked the request from this server. The cookie may still work -- save it without verification, or try again later.",
+  network:
+    "Couldn't check this cookie: Cults3D didn't respond. Check this server's internet connection and try again.",
+};
+
+const cults3dCookieSchema = z.object({ cookie: z.string().nullable(), verify: z.boolean().optional() });
+router.patch(
+  "/settings/cults3d-cookie",
+  asyncHandler(async (req, res) => {
+    const body = parseBody(cults3dCookieSchema, req.body);
+    const trimmed = (body.cookie ?? "").trim();
+    if (body.verify && trimmed) {
+      const check = await verifyCults3dCookie(trimmed);
+      if (check.result === "invalid") {
+        throw new HttpError(
+          422,
+          "Cults3D rejected this cookie -- it may be invalid or expired. Copy a fresh Cookie header (or _session_id value) from a logged-in cults3d.com tab and try again.",
+        );
+      }
+      // 503, not 422: nothing is known to be wrong with the cookie.
+      if (check.result === "unverifiable") throw new HttpError(503, CULTS3D_UNVERIFIABLE_MESSAGES[check.reason]);
+    }
+    const configured = await setUserCults3dCookie(req.userId!, body.cookie);
     res.json({ configured });
   }),
 );
