@@ -1,6 +1,6 @@
 /** URL-shape detection shared by useUploadImport and AddMenu so they can't drift apart. */
 
-export type ImportProviderKey = "makerworld" | "thingiverse" | "printables";
+export type ImportProviderKey = "makerworld" | "thingiverse" | "printables" | "cults3d";
 
 function parseUrl(url: string): URL | null {
   try {

@@ -1610,6 +1610,9 @@
       "sizeHint": "Total size of all this model's files in storage",
       "author": "Author",
       "downloadModelFiles": "Download model files",
+      "uploadModelFiles": "Upload model files",
+      "uploadingFiles": "Uploading…",
+      "filesPendingHint": "No files yet -- buy and download them from the source, then upload them here.",
       "imported": "Imported {{date}}"
     },
     "edit": {

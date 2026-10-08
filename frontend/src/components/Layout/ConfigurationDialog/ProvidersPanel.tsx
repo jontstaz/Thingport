@@ -96,7 +96,20 @@ export default function ProvidersPanel({ isAdmin, cookie, onUpdateMakerWorld, on
       setConnected((current) => ({ ...current, thingiverse: result.configured }));
     } else if (id === "cults3d") {
       // value is the per-user session cookie; admins can additionally pass the API pair.
-      const cookie = await settingsApi.updateCults3dCookie(value);
+      let cookie;
+      try {
+        cookie = await settingsApi.updateCults3dCookie(value);
+      } catch (err) {
+        // Cloudflare blocked the check from this server: the cookie may still be fine (the
+        // extension's live capture works regardless). Save without verification rather than
+        // blocking the user.
+        if (err instanceof UnauthorizedError) throw err;
+        if (value && (err as Error & { unverifiable?: boolean }).unverifiable) {
+          cookie = await settingsApi.updateCults3dCookie(value, { verify: false });
+        } else {
+          throw err;
+        }
+      }
       let apiConfigured = true;
       if (isAdmin && secondValue != null) {
         const result = await settingsApi.updateCults3d(secondValue.key, secondValue.user);

@@ -222,16 +222,23 @@ export const settingsApi = {
     return res.json();
   },
 
-  // Clearing (null) is never verified.
-  updateCults3dCookie: async (cookie: string | null): Promise<{ configured: boolean }> => {
+  // Clearing (null) is never verified. `verify: false` skips the live check when Cults3D's
+  // Cloudflare blocks the server (503 unverifiable) -- the user explicitly chose "save anyway".
+  updateCults3dCookie: async (
+    cookie: string | null,
+    options?: { verify?: boolean },
+  ): Promise<{ configured: boolean }> => {
     const res = await fetch(`${apiBase()}/settings/cults3d-cookie`, {
       method: "PATCH",
       headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ cookie, verify: true }),
+      body: JSON.stringify({ cookie, verify: options?.verify !== false }),
     });
     if (res.status === 401) throw new UnauthorizedError();
     if (!res.ok) {
-      throw new Error(await readErrorMessage(res, "Failed to update Cults3D download settings"));
+      const error = new Error(await readErrorMessage(res, "Failed to update Cults3D download settings"));
+      // Tag unverifiable responses so the caller can offer "save without verification".
+      (error as Error & { unverifiable?: boolean }).unverifiable = res.status === 503;
+      throw error;
     }
     return res.json();
   },

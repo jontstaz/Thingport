@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import Paper from "@mui/material/Paper";
@@ -13,6 +13,7 @@ import StorageIcon from "@mui/icons-material/Storage";
 import LaunchIcon from "@mui/icons-material/Launch";
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import DownloadIcon from "@mui/icons-material/Download";
+import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import PrintIcon from "@mui/icons-material/Print";
 import type { Print } from "../../api/prints";
@@ -29,6 +30,8 @@ import RollingNumber from "../../components/RollingNumber";
 import { formatFileSize } from "../../utils/fileSize";
 import AuthorHoverCard from "../../components/AuthorHoverCard";
 import DownloadPickerDialog from "./DownloadPickerDialog";
+import { printsApi } from "../../api/prints";
+import { UnauthorizedError } from "../../api/client";
 
 type Props = {
   print: Print;
@@ -59,6 +62,25 @@ export default function ModelSidePanel({ print, onSelectCategory, onUnauthorized
   const [slicerMenuAnchor, setSlicerMenuAnchor] = useState<HTMLElement | null>(null);
   const [normalizedMenuAnchor, setNormalizedMenuAnchor] = useState<HTMLElement | null>(null);
   const normalized = useNormalizedOpen(print.id, recordUse, onUnauthorized);
+
+  // A file-less import (e.g. a Cults3D model not yet purchased): instead of the download button,
+  // offer attaching the model files bought/downloaded later. Same endpoint as Edit > add files.
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const filesPending = print.plates.length === 0;
+  const handleUploadFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      const result = await printsApi.addPlates(print.id, Array.from(files));
+      onUpdated?.(result.print);
+    } catch (err) {
+      if (err instanceof UnauthorizedError) onUnauthorized?.();
+    } finally {
+      setUploading(false);
+      if (uploadInputRef.current) uploadInputRef.current.value = "";
+    }
+  };
 
   const goToCategory = () => {
     if (!print.category_id) return;
@@ -238,19 +260,50 @@ export default function ModelSidePanel({ print, onSelectCategory, onUnauthorized
           />
         )}
 
-        <Button
-          onClick={handleDownload}
-          disabled={downloading}
-          startIcon={<DownloadIcon fontSize="small" />}
-          fullWidth
-          sx={{
-            bgcolor: "primary.main",
-            color: "primary.contrastText",
-            "&:hover": { bgcolor: "primary.dark" },
-          }}
-        >
-          {t("models:detail.downloadModelFiles")}
-        </Button>
+        {filesPending ? (
+          <>
+            <input
+              ref={uploadInputRef}
+              type="file"
+              multiple
+              hidden
+              accept=".stl,.obj,.3mf,.step,.stp,.gcode,.zip"
+              onChange={(e) => void handleUploadFiles(e.target.files)}
+            />
+            <Button
+              onClick={() => uploadInputRef.current?.click()}
+              disabled={uploading}
+              startIcon={<CloudUploadIcon fontSize="small" />}
+              fullWidth
+              sx={{
+                bgcolor: "primary.main",
+                color: "primary.contrastText",
+                "&:hover": { bgcolor: "primary.dark" },
+              }}
+            >
+              {uploading ? t("models:detail.uploadingFiles") : t("models:detail.uploadModelFiles")}
+            </Button>
+            {print.source_url && (
+              <Typography variant="caption" color="text.secondary" sx={{ mt: -0.5, textAlign: "center" }}>
+                {t("models:detail.filesPendingHint")}
+              </Typography>
+            )}
+          </>
+        ) : (
+          <Button
+            onClick={handleDownload}
+            disabled={downloading}
+            startIcon={<DownloadIcon fontSize="small" />}
+            fullWidth
+            sx={{
+              bgcolor: "primary.main",
+              color: "primary.contrastText",
+              "&:hover": { bgcolor: "primary.dark" },
+            }}
+          >
+            {t("models:detail.downloadModelFiles")}
+          </Button>
+        )}
 
         <Stack direction="row" spacing={1.5}>
           <Stack
