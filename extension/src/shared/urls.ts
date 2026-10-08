@@ -79,13 +79,16 @@ export function isPrintablesCollectionUrl(url: string): boolean {
   return Boolean(parsed && isHost(parsed, "printables.com") && /\/collections\/\d+/i.test(parsed.pathname));
 }
 
-/** The path segment is localized too: /en/3d-model/, /fr/modèle-3d/ (URL-encoded). */
+/** The path segment is localized too: /en/3d-model/, /fr/modèle-3d/ (URL-encoded). Model URLs
+ * are slug-keyed with an optional category segment: /en/3d-model/home/vintage-desk-set. */
 export function parseCults3dModelUrl(url: string): { modelId: string } | null {
   const parsed = parse(url);
   if (!parsed || !isHost(parsed, "cults3d.com")) return null;
   const segment = decodeURIComponent(parsed.pathname);
-  const m = segment.match(/\/(?:[a-z]{2}(?:-[a-z]{2})?)\/(?:3d-model|mod(?:è|e)?le-3d)\/(\d+)/i);
-  return m ? { modelId: m[1] } : null;
+  const m = segment.match(/\/(?:[a-z]{2}(?:-[a-z]{2})?)\/(?:3d-model|mod(?:è|e)?le-3d)\/([^/]+\/)?([^/]+)/i);
+  if (!m) return null;
+  const slug = (m[2] || "").trim();
+  return slug ? { modelId: slug } : null;
 }
 
 /** Creator creations pages; the /creators/{name} alias redirects there on the site. */

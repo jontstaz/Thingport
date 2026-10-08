@@ -5,6 +5,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import {
   IMPORT_ALLOWED_EXTS,
+  IMPORT_BROWSER_USER_AGENT,
   IMPORT_HTML_MAX_BYTES,
   IMPORT_MAX_BYTES,
   IMPORT_PREVIEW_IMAGE_DELAY_MS,
@@ -68,7 +69,7 @@ import {
   parseCults3dModelUrl,
   resolveCults3dModel,
 } from "./cults3dApi";
-import { getThingiverseAccessToken } from "./settingsService";
+import { getCults3dCredentialsForRequest, getThingiverseAccessToken } from "./settingsService";
 import { upsertAuthorFromImport } from "./authorService";
 import {
   addPlatesToPrint,
@@ -755,6 +756,46 @@ export async function downloadPlainFileToTemp(url: string, suggestedName: string
   }
 }
 
+/** Like downloadPlainFileToTemp, but with the Cults3D Basic credentials the site's download
+ * endpoint requires. Cloudflare fronts cults3d.com, so blocks surface as rateLimited. */
+async function downloadCults3dFileToTemp(
+  url: string,
+  suggestedName: string,
+  creds: { apiKey: string; apiUser: string },
+): Promise<PlainDownloadResult> {
+  try {
+    const res = await rawFetch(url, {
+      "User-Agent": IMPORT_BROWSER_USER_AGENT,
+      Accept: "*/*",
+      Authorization: `Basic ${Buffer.from(`${creds.apiUser}:${creds.apiKey}`).toString("base64")}`,
+      Referer: "https://cults3d.com/",
+    });
+    if (res.status === 429 || (res.status === 403 && looksLikeCloudflareBlock(res.headers))) {
+      await res.body?.cancel().catch(() => undefined);
+      return { rateLimited: true };
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    const contentType = res.headers.get("content-type") || "";
+    // A paid model the API user doesn't own redirects to the HTML product page, not a file.
+    if (isHtmlContentType(contentType)) {
+      await res.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    const filename = sanitizeFilename(suggestedName);
+    const tempFilePath = path.join(
+      os.tmpdir(),
+      `thingport-cults3d-${crypto.randomBytes(8).toString("hex")}${path.extname(filename)}`,
+    );
+    await streamToFileCapped(res, tempFilePath, IMPORT_MAX_BYTES);
+    return { input: { filename, mime: guessMimeFromPath(filename), tempFilePath } };
+  } catch {
+    return null;
+  }
+}
+
 /** Every model file bundled with the Thing becomes its own Plate on one Print. */
 async function importThingiverseThing(
   userId: string,
@@ -967,9 +1008,10 @@ async function importCults3dModel(
   }
   const { meta, downloadUrls, galleryImages } = resolved;
 
-  // Cults3D serves paid and free files behind the same API; only files the API user can download
-  // carry a URL, everything else is skipped. Filter to importable model extensions like the
-  // other providers.
+  // No download links come from the API itself; each blueprint downloads from the site's
+  // /download/blueprint/{id} endpoint with the same Basic credentials. Paid models the API user
+  // hasn't purchased redirect to the product page instead of a file, so filter to importable
+  // model extensions first.
   const modelFiles = downloadUrls.filter((f) => {
     const ext = path.extname(f.name).toLowerCase();
     return ext === "" || IMPORT_ALLOWED_EXTS.has(ext);
@@ -981,8 +1023,9 @@ async function importCults3dModel(
     );
   }
 
+  const creds = await getCults3dCredentialsForRequest();
   const downloadResults = await Promise.all(
-    modelFiles.map((file) => downloadPlainFileToTemp(file.url, file.name)),
+    modelFiles.map((file) => downloadCults3dFileToTemp(file.url, file.name, creds)),
   );
   const downloaded = downloadResults
     .filter((result): result is { input: NewPlateInput } => result !== null && "input" in result)

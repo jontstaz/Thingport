@@ -84,7 +84,9 @@ export function isCults3dModelUrl(url: string): boolean {
   if (!parsed) return false;
   const host = parsed.hostname.toLowerCase();
   if (host !== "cults3d.com" && host !== "www.cults3d.com") return false;
-  return /\/(?:[a-z]{2}(?:-[a-z]{2})?)\/3d-model\/\d+/i.test(parsed.pathname);
+  // Slug-keyed with an optional category segment: /en/3d-model/home/vintage-desk-set.
+  const segment = decodeURIComponent(parsed.pathname);
+  return /\/(?:[a-z]{2}(?:-[a-z]{2})?)\/(?:3d-model|mod(?:è|e)?le-3d)\/([^/]+\/)?[^/]+/i.test(segment);
 }
 
 export function isCults3dCreationsUrl(url: string): boolean {
@@ -109,7 +111,7 @@ export const IMPORT_LINK_EXAMPLES: Record<ImportProviderKey, { model: string; co
     collection: "https://www.printables.com/@username/collections/12345-example-collection",
   },
   cults3d: {
-    model: "https://cults3d.com/en/3d-model/123456/example-model",
+    model: "https://cults3d.com/en/3d-model/home/example-model",
     collection: "https://cults3d.com/en/users/username/creations",
   },
 };

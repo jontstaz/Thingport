@@ -1,17 +1,16 @@
 import { IMPORT_BROWSER_USER_AGENT, IMPORT_TIMEOUT_SECONDS } from "../config";
 import { HttpError } from "../utils/fileUtils";
 import { type ImportedAuthorInfo, type ImportedPageMetadata } from "./importResolvers";
-import { htmlToMarkdown } from "./descriptionMarkdown";
-import { getCults3dApiKey, getCults3dApiUser } from "./settingsService";
 
-// Official API: https://cults3d.com/en/developers -- GraphQL, authenticated per request with an
-// API key + API user pair. Unlike Printables, requests are NOT anonymous.
-const CULTS3D_GRAPHQL_URL = "https://api.cults3d.com/graphql";
-const CULTS3D_MEDIA_BASE = "https://cdn.cults3d.com/";
+// Verified live against the public API (Nov 2025): https://cults3d.com/graphql, HTTP Basic auth
+// with "apiUser:apiKey". There is no api.cults3d.com host. The API exposes rich metadata but no
+// download links (blueprints.fileUrl is always null); downloads go through the site's
+// /download/blueprint/{id} endpoint with the same credentials.
+const CULTS3D_GRAPHQL_URL = "https://cults3d.com/graphql";
 const API_TIMEOUT_MS = IMPORT_TIMEOUT_SECONDS * 1000;
 const CULTS3D_PROVIDER = "cults3d";
 
-/** Creations listings are paginated; 50 is a sane page size that matches the other providers. */
+/** Creations listings are paginated with limit/offset; 50 matches the other providers. */
 const CREATIONS_PAGE_SIZE = 50;
 /** Hard cap so a pathological listing can't create an unbounded loop. */
 const CREATIONS_MAX_PAGES = 40;
@@ -20,13 +19,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function cults3dMediaUrl(filePath: unknown): string | null {
-  if (typeof filePath !== "string" || !filePath.trim()) return null;
-  const value = filePath.trim();
-  return /^https?:\/\//i.test(value) ? value : `${CULTS3D_MEDIA_BASE}${value.replace(/^\//, "")}`;
-}
-
-/** The site is localized (/en/, /fr/, ...) but model ids are language-independent. */
+/** Model URLs are slug-keyed with a category segment: /en/3d-model/home/vintage-desk-set-….
+ * The category isn't part of the model's identity -- only the trailing slug is. */
 export function parseCults3dModelUrl(url: string): { modelId: string } | null {
   let parsed: URL;
   try {
@@ -36,14 +30,16 @@ export function parseCults3dModelUrl(url: string): { modelId: string } | null {
   }
   const host = parsed.hostname.toLowerCase();
   if (host !== "cults3d.com" && host !== "www.cults3d.com") return null;
-  // The path segment itself is localized too: /en/3d-model/, /fr/modèle-3d/ (URL-encoded).
+  // The path segment is localized: /en/3d-model/, /fr/modèle-3d/ (URL-encoded).
   const segment = decodeURIComponent(parsed.pathname);
-  const m = segment.match(/\/(?:[a-z]{2}(?:-[a-z]{2})?)\/(?:3d-model|mod(?:è|e)?le-3d)\/(\d+)/i);
-  return m ? { modelId: m[1] } : null;
+  const m = segment.match(/\/(?:[a-z]{2}(?:-[a-z]{2})?)\/(?:3d-model|mod(?:è|e)?le-3d)\/([^/]+\/)?([^/]+)/i);
+  if (!m) return null;
+  const slug = (m[2] || "").trim();
+  return slug ? { modelId: slug } : null;
 }
 
-/** Creator creations pages: /en/users/{username}/creations (the /creators/{username} alias also
- * redirects there on the site). */
+/** Creator creations pages: /en/users/{nick}/creations (the /creators/{nick} alias redirects
+ * there on the site). */
 export function parseCults3dUserCreationsUrl(url: string): { username: string } | null {
   let parsed: URL;
   try {
@@ -71,20 +67,13 @@ export class Cults3dAuthError extends Error {
 
 export class Cults3dRateLimitError extends Error {
   constructor() {
-    super(
-      "Cults3D rate-limited this request. Wait a bit, then retry the same import.",
-    );
+    super("Cults3D rate-limited this request. Wait a bit, then retry the same import.");
     this.name = "Cults3dRateLimitError";
   }
 }
 
 async function fetchCults3dGraphql(query: string, variables: Record<string, unknown>): Promise<unknown | null> {
-  const apiKey = await getCults3dApiKey();
-  const apiUser = await getCults3dApiUser();
-  if (!apiKey || !apiUser) {
-    throw new Cults3dAuthError();
-  }
-
+  const { apiKey, apiUser } = await getCults3dCredentialsForRequest();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   let res: Response;
@@ -95,8 +84,7 @@ async function fetchCults3dGraphql(query: string, variables: Record<string, unkn
         "User-Agent": IMPORT_BROWSER_USER_AGENT,
         Accept: "application/json",
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "X-Api-User": apiUser,
+        Authorization: `Basic ${Buffer.from(`${apiUser}:${apiKey}`).toString("base64")}`,
       },
       body: JSON.stringify({ query, variables }),
       signal: controller.signal,
@@ -107,7 +95,13 @@ async function fetchCults3dGraphql(query: string, variables: Record<string, unkn
     clearTimeout(timeout);
   }
 
-  if (res.status === 401 || res.status === 403) throw new Cults3dAuthError();
+  if (res.status === 401 || res.status === 403) {
+    // Cloudflare fronts this endpoint; its block page also 403s. Only a JSON error is a real
+    // credentials rejection -- otherwise surface a distinct rate-limit/block signal.
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) throw new Cults3dAuthError();
+    throw new Cults3dRateLimitError();
+  }
   if (res.status === 429) throw new Cults3dRateLimitError();
 
   const text = await res.text();
@@ -122,6 +116,10 @@ async function fetchCults3dGraphql(query: string, variables: Record<string, unkn
   }
 }
 
+// Late import to avoid a settingsService -> fileUtils -> settingsService cycle concern; it's fine
+// as a value import but keeps this module's dependency surface explicit.
+import { getCults3dCredentialsForRequest } from "./settingsService";
+
 function firstGraphqlError(response: unknown): string | null {
   if (isRecord(response) && Array.isArray(response.errors) && response.errors.length) {
     const first = response.errors[0];
@@ -130,60 +128,46 @@ function firstGraphqlError(response: unknown): string | null {
   return null;
 }
 
-// Field names follow the documented public schema; parsing is defensive everywhere so an added
-// or renamed field degrades gracefully instead of breaking imports.
+// Field names verified by live introspection. Parsing stays defensive so an added or renamed
+// field degrades gracefully instead of breaking imports.
 const MODEL_QUERY = `
-  query ($id: ID!) {
-    product(id: $id) {
-      id
+  query ($slug: String!) {
+    creation(slug: $slug) {
       name
       description
-      createdAt
-      creator {
-        id
-        username
-        profileImage
-      }
-      images {
-        path
-        rank
-      }
-      files {
-        id
-        name
-        formatType
-        url
-      }
-      tags {
-        name
-      }
+      publishedAt
+      illustrationImageUrl
+      tags
+      metaTags { name }
+      category { name slug }
+      creator { nick url imageUrl bio }
+      illustrations { imageUrl position }
+      blueprints { id fileName fileExtension }
+      openPriced
+      price { cents currency }
     }
   }
 `;
 
 const USER_QUERY = `
-  query ($username: String!, $offset: Int!, $limit: Int!) {
-    user(username: $username) {
-      id
-      username
-      profileImage
+  query ($nick: String!, $offset: Int!, $limit: Int!) {
+    user(nick: $nick) {
+      nick
+      imageUrl
+      bio
+      url
+      creationsCount
       creations(offset: $offset, limit: $limit) {
-        totalCount
-        products {
-          id
-          name
-          images {
-            path
-            rank
-          }
-        }
+        name
+        slug
+        illustrationImageUrl
       }
     }
   }
 `;
 
 export type Cults3dGalleryImage = { url: string; filename: string };
-export type Cults3dDownloadFile = { id: string; name: string; url: string };
+export type Cults3dDownloadFile = { id: string; numericId: string; name: string; url: string };
 
 export type Cults3dModelData = {
   meta: Partial<ImportedPageMetadata>;
@@ -193,23 +177,38 @@ export type Cults3dModelData = {
 
 function extractAuthor(creator: unknown): ImportedAuthorInfo | null {
   if (!isRecord(creator)) return null;
-  const username = typeof creator.username === "string" && creator.username.trim() ? creator.username.trim() : null;
-  if (!username) return null;
+  const nick = typeof creator.nick === "string" && creator.nick.trim() ? creator.nick.trim() : null;
+  if (!nick) return null;
   return {
     provider: CULTS3D_PROVIDER,
-    externalId: creator.id != null ? String(creator.id) : "",
-    name: username,
-    handle: username,
-    bio: null,
+    // The API keys creations by slug, and users by nick; nick is the stable creator id here.
+    externalId: nick,
+    name: nick,
+    handle: nick,
+    bio: typeof creator.bio === "string" && creator.bio.trim() ? creator.bio.trim() : null,
     bioTranslated: null,
-    links: [],
-    avatarUrl: cults3dMediaUrl(creator.profileImage),
+    links: typeof creator.url === "string" && creator.url.trim() ? [creator.url.trim()] : [],
+    avatarUrl: typeof creator.imageUrl === "string" && creator.imageUrl.trim() ? creator.imageUrl.trim() : null,
     backgroundUrl: null,
   };
 }
 
-export async function resolveCults3dModel(modelId: string): Promise<Cults3dModelData | null> {
-  const response = await fetchCults3dGraphql(MODEL_QUERY, { id: modelId });
+/** Blueprint ids are base64 of "Blueprint/15724956"; the site's download endpoint takes the
+ * numeric half. */
+function blueprintNumericId(id: unknown): string | null {
+  if (typeof id !== "string" || !id.trim()) return null;
+  try {
+    const decoded = Buffer.from(id, "base64").toString("utf8");
+    const m = decoded.match(/(\d+)$/);
+    if (m) return m[1];
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+export async function resolveCults3dModel(slug: string): Promise<Cults3dModelData | null> {
+  const response = await fetchCults3dGraphql(MODEL_QUERY, { slug });
 
   const apiError = firstGraphqlError(response);
   if (apiError?.toLowerCase().includes("not found")) return null;
@@ -218,61 +217,75 @@ export async function resolveCults3dModel(modelId: string): Promise<Cults3dModel
     if (apiError) throw new HttpError(502, `Cults3D API: ${apiError}`);
     return null;
   }
-  const product = response.data.product;
-  if (!isRecord(product)) return null;
+  const creation = response.data.creation;
+  if (!isRecord(creation)) return null;
 
   const meta: Partial<ImportedPageMetadata> = {
-    title: typeof product.name === "string" ? product.name : null,
+    title: typeof creation.name === "string" ? creation.name : null,
   };
-  if (typeof product.description === "string" && product.description.trim()) {
-    meta.description = htmlToMarkdown(product.description);
-  }
-  if (typeof product.createdAt === "string") {
-    // Uploaded-at isn't in ImportedPageMetadata; nothing consumes it downstream, so skip.
+  // Descriptions arrive as plain text with light markdown formatting; use them verbatim.
+  if (typeof creation.description === "string" && creation.description.trim()) {
+    meta.description = creation.description.trim();
   }
 
-  const author = extractAuthor(product.creator);
+  const author = extractAuthor(creation.creator);
   if (author) {
     meta.author = author;
     meta.creator = author.name;
   }
 
-  if (Array.isArray(product.tags)) {
-    const tags = product.tags
-      .map((t) => (isRecord(t) && typeof t.name === "string" ? t.name.trim() : null))
-      .filter((t): t is string => Boolean(t));
-    if (tags.length) meta.tags = tags;
+  const tags: string[] = [];
+  if (Array.isArray(creation.tags)) {
+    for (const tag of creation.tags) {
+      if (typeof tag === "string" && tag.trim()) tags.push(tag.trim());
+    }
   }
+  if (Array.isArray(creation.metaTags)) {
+    for (const tag of creation.metaTags) {
+      if (isRecord(tag) && typeof tag.name === "string" && tag.name.trim()) tags.push(tag.name.trim());
+    }
+  }
+  if (tags.length) meta.tags = tags;
 
-  const galleryImages: Cults3dGalleryImage[] = [];  if (Array.isArray(product.images)) {
-    const ranked = product.images
+  const galleryImages: Cults3dGalleryImage[] = [];
+  if (Array.isArray(creation.illustrations)) {
+    const ranked = creation.illustrations
       .map((img, idx) => ({
-        url: isRecord(img) ? cults3dMediaUrl(img.path) : null,
-        rank: isRecord(img) && typeof img.rank === "number" ? img.rank : idx,
+        url: isRecord(img) && typeof img.imageUrl === "string" && img.imageUrl.trim() ? img.imageUrl.trim() : null,
+        position: isRecord(img) && typeof img.position === "number" ? img.position : idx,
       }))
-      .filter((img): img is { url: string; rank: number } => Boolean(img.url))
-      .toSorted((a, b) => a.rank - b.rank);
-    ranked.forEach((img, idx) =>
-      galleryImages.push({ filename: `image-${idx}.jpg`, url: img.url }),
-    );
+      .filter((img): img is { url: string; position: number } => Boolean(img.url))
+      .toSorted((a, b) => a.position - b.position);
+    ranked.forEach((img, idx) => galleryImages.push({ filename: `image-${idx}`, url: img.url }));
+  }
+  if (!galleryImages.length && typeof creation.illustrationImageUrl === "string") {
+    galleryImages.push({ filename: "image-0", url: creation.illustrationImageUrl });
   }
   if (galleryImages.length) meta.previewImageUrl = galleryImages[0].url;
   meta.galleryImages = galleryImages;
 
-  // Cults3D only exposes download URLs through the API for content the API user can download.
-  // Files without a URL are skipped; if none carry one, the import fails with a clear message.
+  // No download links come from the API (fileUrl is always null); the site's download endpoint
+  // takes the numeric blueprint id and checks the same Basic credentials.
   const downloadUrls: Cults3dDownloadFile[] = [];
-  if (Array.isArray(product.files)) {
-    for (const file of product.files) {
-      if (!isRecord(file)) continue;
-      const url = typeof file.url === "string" && file.url.trim() ? file.url.trim() : null;
-      const id = file.id != null ? String(file.id) : null;
-      if (!url || !id) continue;
+  if (Array.isArray(creation.blueprints)) {
+    for (const bp of creation.blueprints) {
+      if (!isRecord(bp)) continue;
+      const numericId = blueprintNumericId(bp.id);
+      if (!numericId) continue;
+      const ext =
+        typeof bp.fileExtension === "string" && bp.fileExtension.trim()
+          ? `.${bp.fileExtension.trim().toLowerCase().replace(/^\./, "")}`
+          : "";
       const name =
-        typeof file.name === "string" && file.name.trim()
-          ? file.name.trim()
-          : `cults3d-${modelId}-${id}${typeof file.formatType === "string" ? `.${file.formatType.toLowerCase()}` : ""}`;
-      downloadUrls.push({ id, name, url });
+        typeof bp.fileName === "string" && bp.fileName.trim()
+          ? bp.fileName.trim()
+          : `cults3d-${slug}-${numericId}${ext}`;
+      downloadUrls.push({
+        id: String(bp.id),
+        numericId,
+        name,
+        url: `https://cults3d.com/download/blueprint/${numericId}`,
+      });
     }
   }
 
@@ -282,7 +295,6 @@ export async function resolveCults3dModel(modelId: string): Promise<Cults3dModel
 export type Cults3dUserEntry = { modelId: string; title: string; cover: string | null };
 
 export type Cults3dUserListing = {
-  userId: string | null;
   username: string;
   title: string;
   entries: Cults3dUserEntry[];
@@ -290,16 +302,15 @@ export type Cults3dUserListing = {
   truncated: boolean;
 };
 
-/** Lists a creator's creations, following pagination up to CREATIONS_MAX_PAGES. */
+/** Lists a creator's creations, following limit/offset pagination up to CREATIONS_MAX_PAGES. */
 export async function fetchCults3dUserCreations(username: string): Promise<Cults3dUserListing | null> {
   const entries: Cults3dUserEntry[] = [];
   let totalCount = 0;
-  let userId: string | null = null;
   let resolvedUsername = username;
 
   for (let page = 0; page < CREATIONS_MAX_PAGES; page++) {
     const response = await fetchCults3dGraphql(USER_QUERY, {
-      username,
+      nick: username,
       offset: page * CREATIONS_PAGE_SIZE,
       limit: CREATIONS_PAGE_SIZE,
     });
@@ -311,46 +322,33 @@ export async function fetchCults3dUserCreations(username: string): Promise<Cults
     const user = response.data.user;
     if (!isRecord(user)) return entries.length ? buildListing() : null;
 
-    if (user.id != null) userId = String(user.id);
-    if (typeof user.username === "string" && user.username.trim()) resolvedUsername = user.username.trim();
+    if (typeof user.nick === "string" && user.nick.trim()) resolvedUsername = user.nick.trim();
+    if (typeof user.creationsCount === "number") totalCount = user.creationsCount;
 
     const creations = user.creations;
-    if (isRecord(creations)) {
-      if (typeof creations.totalCount === "number") totalCount = creations.totalCount;
-      if (Array.isArray(creations.products)) {
-        for (const product of creations.products) {
-          if (!isRecord(product) || product.id == null) continue;
-          let cover: string | null = null;
-          if (Array.isArray(product.images)) {
-            const best = product.images
-              .map((img, idx) => ({
-                url: isRecord(img) ? cults3dMediaUrl(img.path) : null,
-                rank: isRecord(img) && typeof img.rank === "number" ? img.rank : idx,
-              }))
-              .filter((img): img is { url: string; rank: number } => Boolean(img.url))
-              .toSorted((a, b) => a.rank - b.rank)[0];
-            cover = best?.url ?? null;
-          }
-          entries.push({
-            modelId: String(product.id),
-            title: typeof product.name === "string" && product.name.trim() ? product.name.trim() : `Model ${product.id}`,
-            cover,
-          });
-        }
+    if (isRecord(creations) && Array.isArray(creations.results)) {
+      for (const product of creations.results) {
+        if (!isRecord(product) || typeof product.slug !== "string" || !product.slug.trim()) continue;
+        entries.push({
+          modelId: product.slug.trim(),
+          title:
+            typeof product.name === "string" && product.name.trim() ? product.name.trim() : product.slug.trim(),
+          cover:
+            typeof product.illustrationImageUrl === "string" && product.illustrationImageUrl.trim()
+              ? product.illustrationImageUrl.trim()
+              : null,
+        });
       }
     }
-
-    if (entries.length >= CREATIONS_PAGE_SIZE * (page + 1) && entries.length < totalCount && (page + 1) * CREATIONS_PAGE_SIZE === entries.length) {
-      continue;
-    }
-    break;
+    // User.creations is a plain list (not a connection): stop when a short page comes back.
+    if (!Array.isArray(creations) || (creations as unknown[]).length < CREATIONS_PAGE_SIZE) break;
+    if (totalCount && entries.length >= totalCount) break;
   }
 
   return buildListing();
 
   function buildListing(): Cults3dUserListing {
     return {
-      userId,
       username: resolvedUsername,
       title: `${resolvedUsername}'s creations`,
       entries,

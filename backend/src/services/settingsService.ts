@@ -132,6 +132,16 @@ export async function getCults3dApiUser(): Promise<string | null> {
   return (await getCults3dCredentials()).apiUser;
 }
 
+/** Auth pair for a GraphQL call; throws the same auth error the import paths use. */
+export async function getCults3dCredentialsForRequest(): Promise<{ apiKey: string; apiUser: string }> {
+  const { apiKey, apiUser } = await getCults3dCredentials();
+  if (!apiKey || !apiUser) {
+    const { Cults3dAuthError } = await import("./cults3dApi");
+    throw new Cults3dAuthError();
+  }
+  return { apiKey, apiUser };
+}
+
 /** Both values must be set (or cleared) together -- the API checks the pair. */
 export async function setCults3dCredentials(apiKey: string | null, apiUser: string | null): Promise<void> {
   const trimmedKey = (apiKey ?? "").trim();
@@ -156,30 +166,32 @@ export async function setCults3dCredentials(apiKey: string | null, apiUser: stri
   );
 }
 
-/** Cheap liveness check for the settings form: a trivial query against the live API. */
+/** Cheap liveness check for the settings form: a trivial query against the live API. Uses
+ * HTTP Basic auth ("user:key") against cults3d.com/graphql, exactly like the import calls. */
 export async function verifyCults3dCredentials(apiKey: string, apiUser: string): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     let res: Response;
     try {
-      res = await fetch("https://api.cults3d.com/graphql", {
+      res = await fetch("https://cults3d.com/graphql", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json",
-          Authorization: `Bearer ${apiKey}`,
-          "X-Api-User": apiUser,
+          Authorization: `Basic ${Buffer.from(`${apiUser}:${apiKey}`).toString("base64")}`,
         },
-        body: JSON.stringify({ query: "{ __typename }" }),
+        body: JSON.stringify({ query: "{ licenses { code } }" }),
         signal: controller.signal,
       });
     } finally {
       clearTimeout(timeout);
     }
-    if (res.status === 401 || res.status === 403 || res.status === 429) return false;
     if (!res.ok) return false;
-    return true;
+    const body = (await res.json().catch(() => null)) as { errors?: unknown } | null;
+    // A GraphQL auth failure comes back as HTTP 200 with an errors array; a query we're not
+    // allowed to run means the credentials were still accepted.
+    return !body?.errors;
   } catch {
     return false;
   }
